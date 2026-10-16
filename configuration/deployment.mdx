@@ -1,5 +1,5 @@
 ---
-title: "Deploy Toban to Production on AWS"
+title: "Deploy Toban Contribution Viewer to Production on AWS"
 sidebarTitle: "Deployment"
 description: "Deploy Toban's backend to AWS Elastic Beanstalk and frontend to S3+CloudFront using GitHub Actions. Includes CDK infrastructure setup and required secrets."
 ---
@@ -108,15 +108,10 @@ Toban's AWS resources are defined as code in `infrastructure/cdk/` using the AWS
     | `AWS_REGION` | AWS region where your EB environment lives (e.g., `us-east-1`) |
     | `EB_APPLICATION_NAME` | Elastic Beanstalk application name (e.g., `TobanContributionViewer`) |
     | `EB_ENVIRONMENT_NAME` | Elastic Beanstalk environment name (e.g., `TobanContributionViewer-prod`) |
-    | `DATABASE_URL` | Production PostgreSQL connection string for EB environment variables |
-    | `SUPABASE_URL` | Supabase project URL |
-    | `SUPABASE_KEY` | Supabase service role key |
-    | `SUPABASE_JWT_SECRET` | Supabase JWT signing secret |
-    | `OPENROUTER_API_KEY` | OpenRouter API key for LLM inference |
     | `SLACK_WEBHOOK_URL` | *(Optional)* Incoming webhook URL for deployment notifications |
 
     <Note>
-      Environment variables such as `DATABASE_URL` and `SUPABASE_KEY` must also be configured directly in the Elastic Beanstalk environment's **Configuration → Software** settings (or via `eb-config.json`). The GitHub Secrets listed above are used by the deployment workflow itself and to set those EB environment properties during deployment.
+      The backend workflow deploys the application bundle to Elastic Beanstalk but does **not** inject runtime environment variables (such as `DATABASE_URL` or `SUPABASE_KEY`) via GitHub Secrets. Those values must be configured directly in the Elastic Beanstalk environment's **Configuration → Software** settings (or via `eb-config.json`) in the AWS Console.
     </Note>
 
   </Tab>
@@ -133,7 +128,7 @@ Toban's AWS resources are defined as code in `infrastructure/cdk/` using the AWS
     1. Checks out the repository and sets up Node.js 20 with npm caching.
     2. Installs dependencies with `npm ci` inside `frontend/`.
     3. Runs the test suite with `npm test`, then enforces code quality with `npm run lint` and `npm run typecheck`.
-    4. Builds the production bundle with `npm run build`, injecting `VITE_API_URL` and Supabase configuration from secrets as environment variables.
+    4. Builds the production bundle with `npm run build`, injecting `VITE_API_URL`, `VITE_AUTH0_DOMAIN`, `VITE_AUTH0_CLIENT_ID`, and `VITE_AUTH0_AUDIENCE` from secrets as environment variables.
     5. Configures AWS credentials from repository secrets.
     6. Syncs the compiled `frontend/dist/` directory to the S3 bucket with `aws s3 sync --delete` (removes stale files).
     7. Creates a CloudFront invalidation for `/*` to purge cached assets globally.
@@ -148,10 +143,10 @@ Toban's AWS resources are defined as code in `infrastructure/cdk/` using the AWS
     | `AWS_REGION` | AWS region (e.g., `us-east-1`) |
     | `S3_BUCKET_NAME` | Name of the S3 bucket created by CDK's FrontendStack |
     | `CLOUDFRONT_DISTRIBUTION_ID` | CloudFront distribution ID from CDK output |
-    | `SITE_DOMAIN` | Your custom domain (e.g., `app.example.com`) |
     | `FRONTEND_API_URL` | Full backend API URL injected as `VITE_API_URL` at build time (e.g., `https://api.example.com/api/v1`) |
-    | `VITE_SUPABASE_URL` | Supabase project URL for the browser client |
-    | `VITE_SUPABASE_ANON_KEY` | Supabase anon/public key for the browser client |
+    | `AUTH0_DOMAIN` | Auth0 tenant domain injected as `VITE_AUTH0_DOMAIN` at build time |
+    | `AUTH0_CLIENT_ID` | Auth0 application client ID injected as `VITE_AUTH0_CLIENT_ID` at build time |
+    | `AUTH0_AUDIENCE` | Auth0 API audience injected as `VITE_AUTH0_AUDIENCE` at build time |
     | `SLACK_WEBHOOK_URL` | *(Optional)* Incoming webhook URL for deployment notifications |
 
   </Tab>
@@ -183,7 +178,7 @@ A helper script is provided at `backend/scripts/run_migrations.sh`. It checks th
 
 The script output:
 
-```bash
+```text
 Running database migrations...
 ✅ Database migrations completed successfully
 ```
@@ -240,7 +235,7 @@ The endpoint returns HTTP `200` when the application is up. It does not check da
   </Step>
 
   <Step title="Set up Supabase">
-    Create a Supabase project, copy the **URL**, **service role key**, **anon key**, and **JWT secret** into the appropriate GitHub Secrets and EB environment variables. Add your production frontend domain to **Authentication → URL Configuration → Redirect URLs**.
+    Create a Supabase project, copy the **URL**, **service role key**, **anon key**, and **JWT secret** into the appropriate EB environment variables. Add your production frontend domain to **Authentication → URL Configuration → Redirect URLs**.
   </Step>
 
   <Step title="Push to main to trigger deployment">

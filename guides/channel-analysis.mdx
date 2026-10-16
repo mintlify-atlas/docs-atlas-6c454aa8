@@ -1,5 +1,5 @@
 ---
-title: "Analyze Slack Channels with LLM-Powered Insights"
+title: "Analyze Slack Channels Using LLM-Powered Insights in Toban"
 sidebarTitle: "Channel Analysis"
 description: "Sync Slack channel messages into Toban, then trigger an LLM analysis to generate topic summaries, contributor insights, and key highlights."
 ---
@@ -133,6 +133,7 @@ POST /api/v1/integrations/{integration_id}/resources/{resource_id}/analyze
 | `include_threads` | boolean | No | Include thread reply content in the prompt (default: `true`) |
 | `include_reactions` | boolean | No | Include reaction counts in contributor scoring (default: `true`) |
 | `model` | string | No | OpenRouter model identifier. Defaults to `OPENROUTER_DEFAULT_MODEL` |
+| `analysis_type` | string | No | Type of analysis to run (default: `"contribution"`) |
 
 <CodeGroup>
 ```bash curl

@@ -1,7 +1,7 @@
 ---
-title: "Teams API — Create and Manage Toban Teams"
+title: "Teams API — Create, Update, and Delete Toban Teams"
 sidebarTitle: "Teams"
-description: "REST endpoints to list, create, retrieve, update, and delete teams. All endpoints require authentication; creation and deletion require elevated permissions."
+description: "REST endpoints to list, create, retrieve, update, and delete teams. All requests require authentication; updates and deletions need elevated permissions."
 ---
 
 Teams are the top-level organizational unit in Toban Contribution Viewer. Every integration, report, and member belongs to a team. A team can represent a company, a department, or a personal workspace — the `is_personal` flag distinguishes personal teams from shared ones. All endpoints below sit under the `/api/v1/teams` prefix and require a valid bearer token in the `Authorization` header.
@@ -142,8 +142,8 @@ POST /api/v1/teams/
   The team's display name (max 255 characters).
 </ParamField>
 
-<ParamField body="slug" type="string">
-  A URL-safe identifier for the team (max 255 characters). If omitted, one is automatically generated from `name`.
+<ParamField body="slug" type="string" required>
+  A URL-safe identifier for the team (max 255 characters). Pass an empty string (`""`) to have the server auto-generate one from `name`.
 </ParamField>
 
 <ParamField body="description" type="string">

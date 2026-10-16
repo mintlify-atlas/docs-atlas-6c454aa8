@@ -1,7 +1,7 @@
 ---
 title: "Integrations API — Connect and Manage External Services"
 sidebarTitle: "Integrations"
-description: "REST endpoints to list, create, update, and share integrations between teams. Supports Slack with a dedicated OAuth endpoint."
+description: "REST endpoints to list, create, update, and share integrations between teams. Includes a dedicated Slack OAuth endpoint and per-team share controls."
 ---
 
 Integrations represent connections to external services — currently Slack, with GitHub, Notion, and Discord supported in the schema. Each integration is owned by a team and can optionally be shared with other teams at configurable permission levels. The Slack integration uses an OAuth flow to obtain and store access tokens securely; credential values are never returned in API responses by default.

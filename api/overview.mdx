@@ -1,5 +1,5 @@
 ---
-title: "REST API Reference — Toban Contribution Viewer"
+title: "Toban API Overview — Versioning, Auth and Endpoints"
 sidebarTitle: "Overview"
 description: "Toban exposes a versioned REST API at /api/v1. All endpoints return JSON and require a Supabase JWT Bearer token except health check."
 ---
@@ -122,8 +122,9 @@ You can extend this list at runtime without modifying the defaults by setting on
 
 | Variable | Format | Purpose |
 |---|---|---|
-| `ADDITIONAL_CORS_ORIGINS` | Comma-separated URLs | Add one or more arbitrary origins (e.g. a staging domain) |
-| `NGROK_URL` | Single URL | Automatically appended when tunnelling with ngrok |
+| `ADDITIONAL_CORS_ORIGINS` | Comma-separated URLs | Add one or more arbitrary origins (e.g. a staging domain); processed by `config.py` at startup |
+| `NGROK_URL` | Single URL | Automatically appended at startup when tunnelling with ngrok |
+| `VITE_ADDITIONAL_ALLOWED_HOSTS` | Single URL | Appended at runtime by `main.py`; useful for frontend dev-proxy setups |
 
 The allowed methods are `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`, and `PATCH`. The allowed headers are `Authorization`, `Content-Type`, `X-Requested-With`, and `Accept`. Credentialed requests (`allow_credentials=true`) are supported on all allowed origins.
 

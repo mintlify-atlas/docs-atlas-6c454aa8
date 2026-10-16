@@ -1,7 +1,7 @@
 ---
-title: "Slack Channels API — Sync and Select Channels"
+title: "Slack Channels API — List, Sync, and Select Channels"
 sidebarTitle: "Channels"
-description: "REST endpoints to list, sync, and select Slack channels for analysis. Supports filtering by type, pagination, and bot installation status."
+description: "REST endpoints to list, background-sync, and select Slack channels for analysis, with filtering by type and bot installation status."
 ---
 
 Before Toban can analyze team communication, the channel catalog must be synchronized from Slack's API into the local database. These endpoints cover the full lifecycle: listing what has already been synced, kicking off a fresh background sync, and marking specific channels for analysis. The sync model is non-blocking — all heavy Slack API work runs in a FastAPI `BackgroundTask` so the HTTP response is immediate.

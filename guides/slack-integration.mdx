@@ -1,7 +1,7 @@
 ---
-title: "Connect a Slack Workspace to Toban"
+title: "Connect a Slack Workspace to Toban Contribution Viewer"
 sidebarTitle: "Slack Integration"
-description: "Set up a Slack app, configure OAuth scopes, and connect your workspace to Toban using the OAuth 2.0 flow. Covers ngrok setup for local development."
+description: "Create a Slack app, configure the required OAuth scopes, and authorize your workspace inside Toban using the OAuth 2.0 flow with ngrok for local dev."
 ---
 
 Toban connects to Slack via OAuth 2.0, giving it read access to your workspace's messages, channels, and user profiles — the raw material it needs to generate contribution insights. You'll create a Slack app, configure the required scopes, then authorize it from within the Toban UI. No Slack credentials need to go into environment variables; users enter their client ID and secret directly in the app.
@@ -65,7 +65,7 @@ Alternatively, you can create the app **From scratch** under **OAuth & Permissio
 
 ## Required OAuth Scopes
 
-The following bot token scopes must be present in **OAuth & Permissions → Scopes → Bot Token Scopes**:
+The eight scopes below are requested at runtime during every OAuth authorization and **must** be present in **OAuth & Permissions → Scopes → Bot Token Scopes**:
 
 | Scope | Purpose |
 |---|---|
@@ -77,9 +77,14 @@ The following bot token scopes must be present in **OAuth & Permissions → Scop
 | `users:read` | Access basic profile information for workspace members |
 | `users.profile:read` | Access extended profile fields like display names |
 | `team:read` | Retrieve workspace name, domain, and icon |
-| `im:history` | Access direct messages (optional — for 1-on-1 contribution tracking) |
+
+The App Manifest in the next section also includes three optional scopes that you may add if your team needs the corresponding data:
+
+| Optional Scope | Purpose |
+|---|---|
+| `im:history` | Access direct messages (1-on-1 contribution tracking) |
 | `mpim:history` | Access group direct messages |
-| `files:read` | Access files shared in channels (optional — for document contribution tracking) |
+| `files:read` | Access files shared in channels (document contribution tracking) |
 
 <Note>
   The `search:read` scope cannot be requested through the OAuth & Permissions page. Toban instead uses the history scopes listed above to collect and index messages for internal searching.

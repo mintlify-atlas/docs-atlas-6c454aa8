@@ -1,5 +1,5 @@
 ---
-title: "Self-Host Toban on AWS or Any Cloud"
+title: "Self-Host Toban Contribution Viewer on AWS with CDK"
 sidebarTitle: "Self-Hosting"
 description: "Deploy Toban's FastAPI backend to AWS Elastic Beanstalk and the React frontend to S3+CloudFront using GitHub Actions CI/CD or the AWS CDK."
 ---
@@ -138,20 +138,14 @@ Add the following secrets to your GitHub repository (**Settings → Secrets and 
   | `AWS_ACCESS_KEY_ID` | IAM access key with Elastic Beanstalk, S3, and related permissions |
   | `AWS_SECRET_ACCESS_KEY` | Corresponding IAM secret key |
   | `AWS_REGION` | AWS region where your EB environment is deployed (e.g., `us-east-1`) |
-  | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
   | `EB_APPLICATION_NAME` | Elastic Beanstalk application name (e.g., `TobanContributionViewer`) |
   | `EB_ENVIRONMENT_NAME` | Elastic Beanstalk environment name (e.g., `TobanContributionViewer-prod`) |
+  | `SLACK_WEBHOOK_URL` | Slack incoming webhook URL for deployment notifications (optional) |
 </Accordion>
 
-<Accordion title="Backend environment variable secrets">
-  | Secret | Description |
-  |---|---|
-  | `DATABASE_URL` | Production PostgreSQL connection string |
-  | `SUPABASE_URL` | Your Supabase project URL |
-  | `SUPABASE_KEY` | Your Supabase service role key |
-  | `SUPABASE_JWT_SECRET` | Your Supabase JWT signing secret |
-  | `OPENROUTER_API_KEY` | Your OpenRouter API key |
-</Accordion>
+<Note>
+  Backend environment variables (`DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`, `OPENROUTER_API_KEY`) are **not** injected by the GitHub Actions workflow. Set them directly on the Elastic Beanstalk environment — either through the AWS Console, the AWS CLI command shown in the CDK section above, or via CDK stack configuration.
+</Note>
 
 ### Frontend Deployment Secrets
 
@@ -163,13 +157,15 @@ Add the following secrets to your GitHub repository (**Settings → Secrets and 
   | `AWS_REGION` | Region where the S3 bucket is located |
   | `S3_BUCKET_NAME` | Name of the S3 bucket used for static hosting |
   | `CLOUDFRONT_DISTRIBUTION_ID` | CloudFront distribution ID (from CDK output or console) |
-  | `SITE_DOMAIN` | Your production domain name (e.g., `app.yoursite.com`) |
-  | `API_DOMAIN` | The Elastic Beanstalk endpoint URL for the backend API |
-  | `FRONTEND_API_URL` | Full URL the frontend uses to reach the API |
-  | `SUPABASE_URL` | Your Supabase project URL |
-  | `SUPABASE_ANON_KEY` | Your Supabase anon/public key |
-  | `SUPABASE_JWT_SECRET` | Your Supabase JWT signing secret |
+  | `FRONTEND_API_URL` | Full URL the frontend uses to reach the backend API (injected as `VITE_API_URL` at build time) |
+  | `AUTH0_DOMAIN` | Auth0 domain injected as `VITE_AUTH0_DOMAIN` at build time |
+  | `AUTH0_CLIENT_ID` | Auth0 client ID injected as `VITE_AUTH0_CLIENT_ID` at build time |
+  | `AUTH0_AUDIENCE` | Auth0 audience injected as `VITE_AUTH0_AUDIENCE` at build time |
 </Accordion>
+
+<Note>
+  The `SITE_DOMAIN` and `API_DOMAIN` secrets are consumed by the **infrastructure** workflow (`infrastructure-deploy.yml`) when deploying CDK stacks, not by the frontend build workflow. Add them to your repository secrets for CDK deployments.
+</Note>
 
 ### Manual Deployment Trigger
 
@@ -204,7 +200,7 @@ echo "NGROK_AUTHTOKEN=your_ngrok_authtoken" > .env.ngrok
 
 The script outputs your tunnel URL, for example:
 
-```
+```text
 Tunnel Status  app  online  https://xyz-123-abc.ngrok-free.app -> http://localhost:5173
 ```
 
@@ -220,7 +216,7 @@ Once you have the URL:
    ./docker-dev.sh restart
    ```
 3. In the Slack app settings at [api.slack.com/apps](https://api.slack.com/apps), go to **OAuth & Permissions → Redirect URLs** and add:
-   ```
+   ```text
    https://xyz-123-abc.ngrok-free.app/auth/slack/callback
    ```
 4. Access Toban through the ngrok URL — `https://xyz-123-abc.ngrok-free.app` — to ensure the full OAuth round-trip uses HTTPS.
@@ -233,7 +229,7 @@ Once you have the URL:
 
 In production, add your CloudFront domain to the Slack app's redirect URL list:
 
-```
+```text
 https://app.yoursite.com/auth/slack/callback
 ```
 

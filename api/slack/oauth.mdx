@@ -1,7 +1,7 @@
 ---
-title: "Slack OAuth Endpoints — Connect Workspaces"
+title: "Slack OAuth API — Authorize Workspaces and Exchange Codes"
 sidebarTitle: "OAuth"
-description: "REST endpoints to initiate Slack OAuth, exchange authorization codes for tokens, and manage connected workspace credentials."
+description: "Endpoints to generate a Slack OAuth authorization URL, exchange codes for bot tokens, and persist the resulting workspace connection."
 ---
 
 Connecting a Slack workspace to Toban follows a standard two-step OAuth 2.0 flow. First, the frontend calls the **oauth-url** endpoint to generate an authorization link and redirects the user to Slack's consent screen. After the user approves, Slack redirects back to the frontend with a short-lived authorization code, which the frontend immediately exchanges via the **oauth-callback** endpoint. On success, the callback persists the workspace record and returns a bot access token along with workspace metadata that the frontend uses to create a Toban integration.

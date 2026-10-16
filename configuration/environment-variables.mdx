@@ -1,5 +1,5 @@
 ---
-title: "Environment Variables Reference for Toban"
+title: "Toban Contribution Viewer Environment Variables Reference"
 sidebarTitle: "Environment Variables"
 description: "Complete reference for all backend, frontend, and Docker environment variables required to run Toban Contribution Viewer in development and production."
 ---
@@ -19,8 +19,16 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="DATABASE_URL" type="string" required>
   Full PostgreSQL connection string used by SQLAlchemy and Alembic. Must be a valid `postgresql://` DSN.
 
-  ```
+  ```text
   DATABASE_URL=postgresql://toban_admin:postgres@localhost/tobancv
+  ```
+</ParamField>
+
+<ParamField path="DATABASE_TEST_URL" type="string">
+  Optional PostgreSQL connection string used by the test suite when `TESTING=True`. When set, the `DATABASE_URL` validator in `config.py` automatically switches to this URL during test runs.
+
+  ```text
+  DATABASE_TEST_URL=postgresql://toban_admin:postgres@localhost/tobancv_test
   ```
 </ParamField>
 
@@ -29,7 +37,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="SUPABASE_URL" type="string" required>
   The base URL of your Supabase project, found in **Project Settings → API**.
 
-  ```
+  ```text
   SUPABASE_URL=https://xyzcompany.supabase.co
   ```
 </ParamField>
@@ -37,7 +45,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="SUPABASE_KEY" type="string" required>
   Your Supabase **service role** key. This key has elevated privileges and should never be exposed to the browser.
 
-  ```
+  ```text
   SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   ```
 </ParamField>
@@ -45,7 +53,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="SUPABASE_JWT_SECRET" type="string" required>
   The JWT signing secret used to verify tokens issued by Supabase Auth. Found in **Project Settings → API → JWT Settings**.
 
-  ```
+  ```text
   SUPABASE_JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long
   ```
 </ParamField>
@@ -55,7 +63,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="OPENROUTER_API_KEY" type="string" required>
   API key for [OpenRouter](https://openrouter.ai), used by the contribution-insights engine to call LLMs.
 
-  ```
+  ```text
   OPENROUTER_API_KEY=sk-or-v1-...
   ```
 </ParamField>
@@ -63,7 +71,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="OPENROUTER_DEFAULT_MODEL" type="string" default="anthropic/claude-3-sonnet:20240229">
   OpenRouter model identifier to use when generating contribution insights. Can be any model available on OpenRouter.
 
-  ```
+  ```text
   OPENROUTER_DEFAULT_MODEL=anthropic/claude-3-sonnet:20240229
   ```
 </ParamField>
@@ -71,7 +79,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="OPENROUTER_MAX_TOKENS" type="integer" default="4000">
   Maximum number of tokens the model may generate per request.
 
-  ```
+  ```text
   OPENROUTER_MAX_TOKENS=4000
   ```
 </ParamField>
@@ -79,7 +87,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="OPENROUTER_TEMPERATURE" type="float" default="0.7">
   Sampling temperature passed to the model. Lower values produce more deterministic output; higher values produce more creative output.
 
-  ```
+  ```text
   OPENROUTER_TEMPERATURE=0.7
   ```
 </ParamField>
@@ -89,7 +97,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="API_URL" type="string">
   Base URL of the backend API. Used to construct OAuth callback URLs (e.g., the Slack redirect URI). In local development with Docker, set this to your ngrok HTTPS URL so that Slack's OAuth flow can reach the container. In production, set it to your Elastic Beanstalk domain.
 
-  ```
+  ```text
   API_URL=https://your-ngrok-domain.ngrok-free.app
   ```
 </ParamField>
@@ -97,43 +105,39 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="FRONTEND_URL" type="string">
   Base URL of the React frontend. Used to redirect users back to the UI after OAuth flows complete.
 
-  ```
+  ```text
   FRONTEND_URL=https://app.example.com
   ```
 </ParamField>
 
 ### CORS
 
-<ParamField path="ALLOWED_HOSTS" type="list[string]">
-  List of origins allowed by the CORS middleware. Defaults to `http://localhost:5173` and `http://localhost:8000`. Provide additional origins via `ADDITIONAL_CORS_ORIGINS` or `NGROK_URL` — the `config.py` validator merges them automatically.
+<ParamField path="ALLOWED_HOSTS" type="list[string]" default='["http://localhost:5173","http://localhost:8000","http://127.0.0.1:5173","http://127.0.0.1:8000"]'>
+  List of origins allowed by the CORS middleware. Defaults to the four localhost origins shown above. Provide additional origins via `ADDITIONAL_CORS_ORIGINS` — the `config.py` validator merges them automatically.
 
-  ```
-  # Managed automatically; see ADDITIONAL_CORS_ORIGINS and NGROK_URL below
+  ```text
+  # Managed automatically; extend via ADDITIONAL_CORS_ORIGINS below
   ```
 </ParamField>
 
-<ParamField path="ADDITIONAL_CORS_ORIGINS" type="string">
+<ParamField path="ADDITIONAL_CORS_ORIGINS" type="string" default='""'>
   Comma-separated list of extra origins to append to `ALLOWED_HOSTS`. Useful in staging environments where multiple preview URLs need access.
 
-  ```
+  ```text
   ADDITIONAL_CORS_ORIGINS=https://preview.example.com,https://staging.example.com
   ```
 </ParamField>
 
-<ParamField path="NGROK_URL" type="string">
-  Full HTTPS URL of your ngrok tunnel (e.g., `https://your-domain.ngrok-free.app`). When set, this URL is automatically added to `ALLOWED_HOSTS` and used as the `API_URL` and `FRONTEND_URL` in Docker Compose. Leave unset in production.
-
-  ```
-  NGROK_URL=https://your-domain.ngrok-free.app
-  ```
-</ParamField>
+<Note>
+  The `NGROK_URL` environment variable is **not** a `Settings` field — it is read directly via `os.environ.get("NGROK_URL")` inside the `ALLOWED_HOSTS` validator. When set, the validator automatically appends the ngrok URL to the allowed-origins list. In Docker Compose, `NGROK_URL` from `.env.docker` is also used to populate `API_URL`, `FRONTEND_URL`, and `ADDITIONAL_CORS_ORIGINS` for the backend container.
+</Note>
 
 ### Feature Flags
 
 <ParamField path="ENABLE_SLACK_INTEGRATION" type="boolean" default="True">
   Enables the Slack OAuth flow and message-sync background tasks. Set to `False` to disable all Slack-related routes and background workers.
 
-  ```
+  ```text
   ENABLE_SLACK_INTEGRATION=True
   ```
 </ParamField>
@@ -141,7 +145,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="ENABLE_GITHUB_INTEGRATION" type="boolean" default="True">
   Enables GitHub OAuth routes. Requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` to be set.
 
-  ```
+  ```text
   ENABLE_GITHUB_INTEGRATION=True
   ```
 </ParamField>
@@ -149,17 +153,17 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="ENABLE_NOTION_INTEGRATION" type="boolean" default="True">
   Enables the Notion integration routes. Requires `NOTION_API_KEY` to be set.
 
-  ```
+  ```text
   ENABLE_NOTION_INTEGRATION=True
   ```
 </ParamField>
 
-### Logging
+### Logging and Debug
 
 <ParamField path="DEBUG" type="boolean" default="False">
   When `True`, the FastAPI interactive docs (`/docs`) are enabled and additional debug output is produced. Set to `False` in production.
 
-  ```
+  ```text
   DEBUG=True
   ```
 </ParamField>
@@ -167,8 +171,34 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="LOG_LEVEL" type="string" default="INFO">
   Python logging level for the application. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
 
-  ```
+  ```text
   LOG_LEVEL=INFO
+  ```
+</ParamField>
+
+### Project Metadata
+
+<ParamField path="PROJECT_NAME" type="string" default="Toban Contribution Viewer API">
+  Display name for the project, shown in the auto-generated OpenAPI docs title.
+
+  ```text
+  PROJECT_NAME=Toban Contribution Viewer API
+  ```
+</ParamField>
+
+<ParamField path="PROJECT_VERSION" type="string" default="0.1.0">
+  Semantic version string reported in the OpenAPI schema and health check responses.
+
+  ```text
+  PROJECT_VERSION=0.1.0
+  ```
+</ParamField>
+
+<ParamField path="API_PREFIX" type="string" default="/api/v1">
+  URL prefix applied to all API routes. All endpoints are mounted under this prefix (e.g., `/api/v1/teams`).
+
+  ```text
+  API_PREFIX=/api/v1
   ```
 </ParamField>
 
@@ -177,7 +207,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="GITHUB_CLIENT_ID" type="string">
   OAuth App Client ID from your GitHub Developer settings. Required only when `ENABLE_GITHUB_INTEGRATION=True`.
 
-  ```
+  ```text
   GITHUB_CLIENT_ID=Iv1.abc123def456
   ```
 </ParamField>
@@ -185,7 +215,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="GITHUB_CLIENT_SECRET" type="string">
   OAuth App Client Secret from your GitHub Developer settings. Required only when `ENABLE_GITHUB_INTEGRATION=True`.
 
-  ```
+  ```text
   GITHUB_CLIENT_SECRET=ghsec_...
   ```
 </ParamField>
@@ -193,7 +223,7 @@ These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`.
 <ParamField path="NOTION_API_KEY" type="string">
   Internal Integration Token from your Notion integration settings page. Required only when `ENABLE_NOTION_INTEGRATION=True`.
 
-  ```
+  ```text
   NOTION_API_KEY=secret_...
   ```
 </ParamField>
@@ -211,7 +241,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_API_URL" type="string" required>
   Full URL (including `/api/v1`) of the backend API that the React app will call from the browser.
 
-  ```
+  ```text
   VITE_API_URL=http://localhost:8000/api/v1
   ```
 
@@ -221,7 +251,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_SUPABASE_URL" type="string" required>
   The base URL of your Supabase project — the same value as the backend's `SUPABASE_URL`.
 
-  ```
+  ```text
   VITE_SUPABASE_URL=https://xyzcompany.supabase.co
   ```
 </ParamField>
@@ -229,7 +259,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_SUPABASE_ANON_KEY" type="string" required>
   The **anon/public** key for your Supabase project. This is safe to expose in the browser. Found in **Project Settings → API**.
 
-  ```
+  ```text
   VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
   ```
 </ParamField>
@@ -237,7 +267,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_AUTH_REDIRECT_URI" type="string" default="http://localhost:5173/auth/callback">
   The URI that Supabase Auth will redirect to after a successful sign-in. Must be added to your Supabase project's **Redirect URLs** allowlist.
 
-  ```
+  ```text
   VITE_AUTH_REDIRECT_URI=http://localhost:5173/auth/callback
   ```
 </ParamField>
@@ -245,7 +275,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_DEV_MODE" type="boolean" default="false">
   When `true`, enables additional development-only UI features and verbose client-side logging.
 
-  ```
+  ```text
   VITE_DEV_MODE=true
   ```
 </ParamField>
@@ -253,7 +283,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_ENABLE_SLACK_INTEGRATION" type="boolean" default="true">
   Controls whether Slack-related UI elements (connect workspace, channel sync) are rendered.
 
-  ```
+  ```text
   VITE_ENABLE_SLACK_INTEGRATION=true
   ```
 </ParamField>
@@ -261,7 +291,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_ENABLE_GITHUB_INTEGRATION" type="boolean" default="true">
   Controls whether GitHub-related UI elements are rendered.
 
-  ```
+  ```text
   VITE_ENABLE_GITHUB_INTEGRATION=true
   ```
 </ParamField>
@@ -269,7 +299,7 @@ These variables are consumed by Vite at build time and at runtime in the browser
 <ParamField path="VITE_ENABLE_NOTION_INTEGRATION" type="boolean" default="true">
   Controls whether Notion-related UI elements are rendered.
 
-  ```
+  ```text
   VITE_ENABLE_NOTION_INTEGRATION=true
   ```
 </ParamField>
@@ -297,7 +327,7 @@ These variables are consumed directly by the `postgres:13` Docker image to initi
 <ParamField path="POSTGRES_USER" type="string" default="toban_admin">
   Username for the PostgreSQL superuser created at container initialisation.
 
-  ```
+  ```text
   POSTGRES_USER=toban_admin
   ```
 </ParamField>
@@ -305,7 +335,7 @@ These variables are consumed directly by the `postgres:13` Docker image to initi
 <ParamField path="POSTGRES_PASSWORD" type="string" default="postgres">
   Password for the PostgreSQL superuser. Change this for any environment beyond a local laptop.
 
-  ```
+  ```text
   POSTGRES_PASSWORD=postgres
   ```
 </ParamField>
@@ -313,7 +343,7 @@ These variables are consumed directly by the `postgres:13` Docker image to initi
 <ParamField path="POSTGRES_DB" type="string" default="tobancv">
   Name of the default database created at container initialisation.
 
-  ```
+  ```text
   POSTGRES_DB=tobancv
   ```
 </ParamField>

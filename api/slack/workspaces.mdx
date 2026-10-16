@@ -1,7 +1,7 @@
 ---
-title: "Slack Workspaces API — List and Manage Connections"
+title: "Slack Workspace API — List, Verify, and Disconnect"
 sidebarTitle: "Workspaces"
-description: "REST endpoints to list connected Slack workspaces, verify tokens, check sync status, and disconnect workspaces from Toban."
+description: "REST endpoints to list connected Slack workspaces, verify stored bot tokens, poll sync status, and cleanly disconnect a workspace."
 ---
 
 After completing OAuth, every connected Slack workspace is persisted as a `SlackWorkspace` record. These endpoints let you list all workspaces (including previously disconnected ones), verify that a stored bot token is still valid, poll the background sync progress, and cleanly disconnect a workspace by revoking its credentials without deleting historical data.
@@ -190,6 +190,10 @@ Returns the current channel synchronization state for a workspace. Poll this end
 
 <ResponseField name="channel_count" type="integer">
   Total number of channel records currently stored for this workspace.
+</ResponseField>
+
+<ResponseField name="sync_time" type="string (ISO 8601)">
+  The current server UTC time at the moment the request was processed. Use this to calculate elapsed time since the last sync without relying on clock skew between client and server.
 </ResponseField>
 
 ### Example

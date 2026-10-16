@@ -168,6 +168,10 @@ POST /api/v1/integrations/{integration_id}/resources/{resource_id}/analyze
   UUID of the `slack_channel` resource to analyze.
 </ParamField>
 
+<ParamField body="analysis_type" type="string" default="contribution">
+  The type of analysis to perform. One of: `contribution`, `topics`, `sentiment`, `activity`.
+</ParamField>
+
 <ParamField body="start_date" type="datetime">
   Beginning of the analysis period. Defaults to 30 days before `end_date`.
 </ParamField>

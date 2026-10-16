@@ -1,7 +1,7 @@
 ---
-title: "Authenticate Requests with Supabase JWT"
+title: "Authenticate API Requests Using Supabase JWT Tokens"
 sidebarTitle: "Authentication"
-description: "Toban uses Supabase for user authentication. Learn how to sign in, obtain a JWT, and pass it as a Bearer token in all API requests."
+description: "Toban uses Supabase Auth for sign-in and JWT issuance. Learn how to configure providers, obtain a token, and authorize every API request."
 ---
 
 Toban uses [Supabase Auth](https://supabase.com/docs/guides/auth) — an open-source Firebase alternative — to handle user sign-in, session management, and JWT issuance. Every protected API endpoint requires a valid Supabase JWT passed as a `Bearer` token in the `Authorization` header. The backend validates the token against the `SUPABASE_JWT_SECRET` using the HS256 algorithm and extracts the `sub` claim as the user's ID.
@@ -55,7 +55,6 @@ Configure these variables before starting the application.
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_KEY=your-service-role-key          # Never expose this on the frontend
 SUPABASE_JWT_SECRET=your-jwt-secret         # Must match Supabase project setting
-SUPABASE_ANON_KEY=your-anon-key             # Public key, safe to expose
 
 # Database
 DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/toban

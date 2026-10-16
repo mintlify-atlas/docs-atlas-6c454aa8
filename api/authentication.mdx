@@ -1,7 +1,7 @@
 ---
 title: "API Authentication with Supabase JWT Bearer Tokens"
 sidebarTitle: "Authentication"
-description: "Pass a Supabase-issued JWT in the Authorization: Bearer header on every protected API request. Learn how tokens are validated and what user context is returned."
+description: "Pass a Supabase JWT as an Authorization: Bearer token on every protected request. Covers token validation, user context extraction, and error responses."
 ---
 
 Every protected endpoint in the Toban API uses the `get_current_user` FastAPI dependency defined in `app/core/auth.py`. This dependency reads the `Authorization: Bearer` header from the incoming request, decodes the Supabase-issued JWT using `SUPABASE_JWT_SECRET`, and returns a user context dictionary that route handlers receive as an injected argument. No session store or database lookup is required for basic authentication — all necessary identity information is encoded directly in the token.
@@ -47,13 +47,13 @@ The `Content-Type: application/json` header is required for `POST`, `PUT`, and `
 
 ## Token Validation
 
-The backend validates every token using the `decode_token` function in `app/core/auth.py`. Validation uses the **HS256** algorithm with `SUPABASE_JWT_SECRET` as the signing key. The function attempts three progressive verification strategies to maximise Supabase compatibility:
+The backend validates every token using the `decode_token` function in `app/core/auth.py`. Validation uses the **HS256** algorithm with `SUPABASE_JWT_SECRET` as the signing key. The function attempts three nested verification strategies to maximise Supabase compatibility:
 
 1. **Signature only** — verifies the signature while skipping audience and issuer checks.
-2. **Signature + audience** — additionally verifies the `aud` claim against the Supabase project URL and its `/auth/v1` sub-path.
-3. **Signature + audience + issuer** — full verification including the `iss` claim.
+2. **Signature + audience** — falls back to this when strategy 1 raises, additionally verifying the `aud` claim against the Supabase project URL and its `/auth/v1` sub-path.
+3. **Signature + audience + issuer** — falls back to this when strategy 2 raises, adding full `iss` claim verification.
 
-The first strategy that succeeds returns the decoded payload. If all three fail, a `401 Unauthorized` response is returned immediately.
+The first strategy that succeeds returns the decoded payload. If all three raise exceptions, the outermost handler raises a `401 Unauthorized` response.
 
 <Warning>
   The `SUPABASE_JWT_SECRET` environment variable on the backend **must match** the JWT secret shown in your Supabase project under **Project Settings → API → JWT Settings**. A mismatch causes every token to fail signature verification with `401 Unauthorized`, even when the token itself is valid.
@@ -90,66 +90,92 @@ The following is the complete `get_current_user` dependency and its supporting `
 ```python
 import logging
 import time
-from typing import Dict
+from typing import Dict, List, Optional
+from uuid import UUID
 
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import jwt
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.db.session import get_async_db
 
+# Setup the JWT bearer token validation
 security = HTTPBearer()
 
 
 def decode_token(token: str) -> Dict:
     """
     Decode and validate a JWT token from Supabase Auth.
-    Attempts three progressive verification strategies for compatibility.
+
+    Args:
+        token: JWT token to decode and validate
+
+    Returns:
+        Decoded token payload
+
+    Raises:
+        HTTPException: If token validation fails
     """
     logger = logging.getLogger(__name__)
 
     try:
         jwt_secret = settings.SUPABASE_JWT_SECRET
         if not jwt_secret:
+            logger.error("JWT secret is not configured")
             raise ValueError("JWT secret is not configured")
 
+        # Try progressive token verification approaches for Supabase compatibility
         supabase_url = settings.SUPABASE_URL.rstrip("/")
         audiences = [supabase_url, f"{supabase_url}/auth/v1"]
 
-        # Strategy 1: signature-only verification
+        # First approach: Basic verification without audience/issuer checks
         try:
             return jwt.decode(
                 token,
                 jwt_secret,
                 algorithms=["HS256"],
-                options={"verify_signature": True, "verify_aud": False, "verify_iss": False},
+                options={
+                    "verify_signature": True,
+                    "verify_aud": False,
+                    "verify_iss": False,
+                },
             )
         except Exception:
-            pass
-
-        # Strategy 2: signature + audience
-        try:
-            return jwt.decode(
-                token,
-                jwt_secret,
-                algorithms=["HS256"],
-                audience=audiences,
-                options={"verify_signature": True, "verify_aud": True, "verify_iss": False},
-            )
-        except Exception:
-            pass
-
-        # Strategy 3: full verification
-        return jwt.decode(
-            token,
-            jwt_secret,
-            algorithms=["HS256"],
-            audience=audiences,
-            issuer=supabase_url,
-            options={"verify_signature": True, "verify_aud": True, "verify_iss": True},
-        )
-
+            # Second approach: With audience verification
+            try:
+                return jwt.decode(
+                    token,
+                    jwt_secret,
+                    algorithms=["HS256"],
+                    audience=audiences,
+                    options={
+                        "verify_signature": True,
+                        "verify_aud": True,
+                        "verify_iss": False,
+                    },
+                )
+            except Exception:
+                # Third approach: With full verification
+                try:
+                    return jwt.decode(
+                        token,
+                        jwt_secret,
+                        algorithms=["HS256"],
+                        audience=audiences,
+                        issuer=supabase_url,
+                        options={
+                            "verify_signature": True,
+                            "verify_aud": True,
+                            "verify_iss": True,
+                        },
+                    )
+                except Exception as e:
+                    logger.error(f"All token verification methods failed: {str(e)}")
+                    raise
     except HTTPException:
+        # Re-raise HTTP exceptions
         raise
     except Exception as e:
         logger.error(f"Token verification failed: {str(e)}")
@@ -164,9 +190,18 @@ def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security),
 ) -> Dict:
     """
-    Extract and return the authenticated user from the JWT token.
-    Raises 401 if credentials are missing or invalid.
+    Get the current authenticated user from the JWT token.
+
+    Args:
+        credentials: HTTP authorization credentials
+
+    Returns:
+        Dictionary with user data extracted from token, including team context if available
+
+    Raises:
+        HTTPException: If credentials are invalid or user not found
     """
+    # Check if credentials were properly extracted from the request
     if not credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -174,9 +209,13 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
-    payload = decode_token(credentials.credentials)
+    # Get the token from credentials
+    token = credentials.credentials
 
-    # Validate expiration manually as a safety net
+    # Decode the token
+    payload = decode_token(token)
+
+    # Validate token expiration
     if payload.get("exp") and time.time() > payload["exp"]:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -184,7 +223,9 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Extract user data from the token payload
     user_id = payload.get("sub")
+
     if not user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -192,17 +233,19 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    # Extract team context from the token payload
     user_data = {
         "id": user_id,
         "email": payload.get("email", ""),
         "role": payload.get("role", "authenticated"),
     }
 
-    # Include team context if embedded in the token
+    # Add team context if available
     if payload.get("current_team_id"):
         user_data["current_team_id"] = payload.get("current_team_id")
         user_data["current_team_role"] = payload.get("current_team_role")
 
+    # Add teams list if available
     if payload.get("teams"):
         user_data["teams"] = payload.get("teams")
 

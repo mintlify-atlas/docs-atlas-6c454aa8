@@ -1,5 +1,5 @@
 ---
-title: "Generate Cross-Channel Reports for Your Team"
+title: "Generate Cross-Channel Contribution Reports in Toban"
 sidebarTitle: "Cross-Resource Reports"
 description: "Combine analysis from multiple Slack channels into a single cross-resource report, track generation status, and retrieve aggregated contribution metrics."
 ---
@@ -20,7 +20,7 @@ The `CrossResourceReport` model tracks aggregate statistics (`total_resources`, 
 ## Create a Channel Report
 
 <Note>
-  Creating and generating cross-resource reports requires **admin** or **owner** role membership in the target team. Members with the `member` or `viewer` role can read existing reports but cannot create new ones.
+  Creating channel reports requires at minimum **member** role in the target team. Triggering generation (`/generate`) and updating or deleting reports requires **admin** or **owner** role. Users with the `viewer` role can read existing reports but cannot create or modify them.
 </Note>
 
 Use the simplified channel-report endpoint to create a new report directly from a list of Slack channel resource IDs:

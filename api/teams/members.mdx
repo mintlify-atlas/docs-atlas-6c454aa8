@@ -1,7 +1,7 @@
 ---
-title: "Team Members API — Invite and Manage Members"
+title: "Team Members API — Invite and Manage Team Members"
 sidebarTitle: "Members"
-description: "REST endpoints to list, add, update roles, and remove members from a Toban team. Member roles control access to integrations and reports."
+description: "REST endpoints to list, add, update roles, and remove members from a Toban team. Roles control access to integrations, reports, and team settings."
 ---
 
 Member management is how you control who can see and interact with a team's integrations, contribution data, and reports. Each member holds a **role** that determines their permissions — from read-only `viewer` access all the way to full `owner` control. You can list current members, add new ones directly, send email invitations to external collaborators, update roles, and remove members at any time. All endpoints require authentication and are scoped to a specific team via the `team_id` path parameter.
@@ -275,7 +275,7 @@ POST /api/v1/teams/{team_id}/invite
 
 ### Response
 
-Returns an `HTTP 202 Accepted` status with a confirmation message. The invitation email is dispatched asynchronously.
+Returns an `HTTP 202 Accepted` status with a confirmation message. A pending membership record is created immediately. Email delivery is not yet implemented in the current version — the response `note` field will indicate this.
 
 ### Example
 
@@ -450,6 +450,51 @@ curl -X POST "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc123456
 {
   "status": "success",
   "message": "Invitation resent to dan@external.io"
+}
+```
+</CodeGroup>
+
+---
+
+## Debug: accept an invitation
+
+Simulates accepting an invitation for a pending or expired member record. This endpoint is intended **for testing purposes only** and should not be used in production flows.
+
+```
+POST /api/v1/teams/{team_id}/members/{member_id}/debug-accept-invite
+```
+
+<Warning>
+  This is a **debug-only** endpoint. It transitions a member's `invitation_status` from `pending` or `expired` to `active` without requiring any email confirmation. Do not expose or rely on this endpoint in production.
+</Warning>
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team.
+</ParamField>
+
+<ParamField path="member_id" type="uuid" required>
+  The UUID of the pending or expired membership record to activate.
+</ParamField>
+
+### Response
+
+Returns a JSON confirmation message on `200 OK`. Returns `404 Not Found` if the member record does not exist. Returns `400 Bad Request` if the member's `invitation_status` is not `pending` or `expired`.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members/018e2f3b-0004-7d4e-9f0a-bc1234567894/debug-accept-invite" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "DEBUG: Invitation for dan@external.io has been accepted",
+  "note": "This is a debug feature for testing purposes only"
 }
 ```
 </CodeGroup>

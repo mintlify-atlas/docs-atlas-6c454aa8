@@ -1,5 +1,5 @@
 ---
-title: "How Toban Analyzes Team Contributions"
+title: "How Toban Analyzes Team Contributions via OpenRouter"
 sidebarTitle: "Analysis"
 description: "Toban uses OpenRouter LLMs to analyze Slack channel messages, extract topics and contributors, and store structured results as ResourceAnalysis records."
 ---
@@ -93,12 +93,13 @@ A `CrossResourceReport` groups one or more `ResourceAnalysis` records together i
 | `date_range_start` | datetime | Start of the overall report window |
 | `date_range_end` | datetime | End of the overall report window |
 | `comprehensive_analysis` | text | LLM-generated cross-resource synthesis (generated after all individual analyses complete) |
+| `comprehensive_analysis_generated_at` | datetime | When the cross-resource synthesis was produced |
 | `model_used` | string | Model used for the comprehensive synthesis step |
 | `report_parameters` | JSONB | Configuration snapshot for the full report |
 
 The status lifecycle for a `CrossResourceReport` follows this flow:
 
-```
+```text
 PENDING → IN_PROGRESS → COMPLETED
                       ↘ FAILED
 ```
