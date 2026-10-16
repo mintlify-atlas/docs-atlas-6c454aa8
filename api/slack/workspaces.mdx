@@ -1,0 +1,257 @@
+---
+title: "Slack Workspaces API — List and Manage Connections"
+sidebarTitle: "Workspaces"
+description: "REST endpoints to list connected Slack workspaces, verify tokens, check sync status, and disconnect workspaces from Toban."
+---
+
+After completing OAuth, every connected Slack workspace is persisted as a `SlackWorkspace` record. These endpoints let you list all workspaces (including previously disconnected ones), verify that a stored bot token is still valid, poll the background sync progress, and cleanly disconnect a workspace by revoking its credentials without deleting historical data.
+
+---
+
+## GET /api/v1/slack/workspaces
+
+Returns all workspace records that have ever been connected to Toban, regardless of their current connection status.
+
+### Response
+
+```json
+{
+  "workspaces": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "slack_id": "T01ABC123",
+      "name": "Acme Corp",
+      "domain": "acme",
+      "icon_url": "https://avatars.slack-edge.com/acme.png",
+      "team_size": 42,
+      "is_connected": true,
+      "connection_status": "active",
+      "last_connected_at": "2024-05-01T10:30:00",
+      "last_sync_at": "2024-05-10T08:00:00",
+      "metadata": {}
+    }
+  ]
+}
+```
+
+<Expandable title="Workspace object fields">
+  <ResponseField name="id" type="string (UUID)">
+    Toban's internal database UUID for the workspace. Use this in all other workspace endpoints.
+  </ResponseField>
+
+  <ResponseField name="slack_id" type="string">
+    Slack's team identifier, e.g. `T01ABC123`. Unique per Slack workspace.
+  </ResponseField>
+
+  <ResponseField name="name" type="string">
+    The human-readable workspace name as it appears in Slack.
+  </ResponseField>
+
+  <ResponseField name="domain" type="string">
+    The workspace's Slack subdomain, e.g. `acme` for `acme.slack.com`.
+  </ResponseField>
+
+  <ResponseField name="icon_url" type="string | null">
+    URL of the workspace icon image. Populated by the background metadata task after OAuth completes. May be `null` for newly connected workspaces.
+  </ResponseField>
+
+  <ResponseField name="team_size" type="integer | null">
+    Approximate number of members in the workspace. Populated by the background metadata task. May be `null` until the background task finishes.
+  </ResponseField>
+
+  <ResponseField name="is_connected" type="boolean">
+    `true` while the workspace has a valid access token. Set to `false` after calling the disconnect endpoint.
+  </ResponseField>
+
+  <ResponseField name="connection_status" type="string">
+    One of `active`, `syncing`, or `disconnected`. Transitions to `syncing` while a background channel sync is in progress.
+  </ResponseField>
+
+  <ResponseField name="last_connected_at" type="string (ISO 8601)">
+    Timestamp of the most recent successful OAuth connection or reconnection.
+  </ResponseField>
+
+  <ResponseField name="last_sync_at" type="string (ISO 8601) | null">
+    Timestamp of the most recent completed channel sync. `null` if no sync has run yet.
+  </ResponseField>
+
+  <ResponseField name="metadata" type="object">
+    Arbitrary JSON metadata populated by the background workspace metadata task (e.g., plan type, locale). Empty object `{}` until the background task completes.
+  </ResponseField>
+</Expandable>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl "https://api.example.com/api/v1/slack/workspaces"
+```
+
+```json Response
+{
+  "workspaces": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "slack_id": "T01ABC123",
+      "name": "Acme Corp",
+      "domain": "acme",
+      "icon_url": "https://avatars.slack-edge.com/acme.png",
+      "team_size": 42,
+      "is_connected": true,
+      "connection_status": "active",
+      "last_connected_at": "2024-05-01T10:30:00",
+      "last_sync_at": "2024-05-10T08:00:00",
+      "metadata": {}
+    }
+  ]
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/v1/slack/workspaces/{workspace_id}/verify
+
+Calls the Slack API with the stored bot token to confirm it is still valid. On success it refreshes workspace metadata (icon URL, team size) either in-line or in the background, depending on whether `BackgroundTasks` is available in the request context.
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  The Toban database UUID of the workspace to verify. Obtain this from the `id` field returned by `GET /api/v1/slack/workspaces`.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `success` if the token is valid and metadata was refreshed, `warning` if the token is valid but metadata update encountered a non-fatal error, or `error` if token verification failed.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  A human-readable description of the verification outcome.
+</ResponseField>
+
+<ResponseField name="workspace" type="object">
+  A summary of the workspace record after verification, including `id`, `name`, `is_connected`, `connection_status`, and (on success/warning) `domain`, `icon_url`, and `team_size`.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/verify"
+```
+
+```json Response (success)
+{
+  "status": "success",
+  "message": "Token verified for Acme Corp",
+  "workspace": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Acme Corp",
+    "is_connected": true,
+    "connection_status": "active",
+    "domain": "acme",
+    "icon_url": "https://avatars.slack-edge.com/acme.png",
+    "team_size": 42
+  }
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/v1/slack/workspaces/{workspace_id}/sync-status
+
+Returns the current channel synchronization state for a workspace. Poll this endpoint after calling `POST .../channels/sync` to track background progress.
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  The Toban database UUID of the workspace to check.
+</ParamField>
+
+### Response
+
+<ResponseField name="is_syncing" type="boolean">
+  `true` while a background channel sync is actively running. If `connection_status` has been `syncing` for more than **5 minutes** without a `last_sync_at` update, the server automatically resets the status to `active` and returns `false` — this prevents the UI from being stuck in a permanent loading state if a background task silently fails.
+</ResponseField>
+
+<ResponseField name="workspace_status" type="string">
+  The raw `connection_status` from the workspace record (`active`, `syncing`, or `disconnected`).
+</ResponseField>
+
+<ResponseField name="last_workspace_sync" type="string (ISO 8601) | null">
+  Timestamp of the last time the workspace-level sync was recorded.
+</ResponseField>
+
+<ResponseField name="last_channel_sync" type="string (ISO 8601) | null">
+  Timestamp of the most recently synced channel's `last_sync_at` value across all channels in this workspace.
+</ResponseField>
+
+<ResponseField name="channel_count" type="integer">
+  Total number of channel records currently stored for this workspace.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/sync-status"
+```
+
+```json Response
+{
+  "status": "success",
+  "workspace_status": "active",
+  "is_syncing": false,
+  "last_workspace_sync": "2024-05-10T08:00:00",
+  "last_channel_sync": "2024-05-10T08:01:30",
+  "channel_count": 87,
+  "sync_time": "2024-05-10T12:00:00.000000"
+}
+```
+</CodeGroup>
+
+---
+
+## DELETE /api/v1/slack/workspaces/{workspace_id}
+
+Disconnects a workspace by setting `is_connected` to `false`, updating `connection_status` to `disconnected`, and clearing the stored `access_token` and `refresh_token`. Historical channel and message data is **not** deleted.
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  The Toban database UUID of the workspace to disconnect.
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "message": "Disconnected from Acme Corp"
+}
+```
+
+<Expandable title="Error responses">
+| HTTP Status | Condition |
+|---|---|
+| 404 | No workspace found with the given `workspace_id` |
+| 500 | Unexpected server error while updating the workspace record |
+</Expandable>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE \
+  "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Disconnected from Acme Corp"
+}
+```
+</CodeGroup>

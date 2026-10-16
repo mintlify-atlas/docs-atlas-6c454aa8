@@ -1,0 +1,222 @@
+---
+title: "Slack Channels API — Sync and Select Channels"
+sidebarTitle: "Channels"
+description: "REST endpoints to list, sync, and select Slack channels for analysis. Supports filtering by type, pagination, and bot installation status."
+---
+
+Before Toban can analyze team communication, the channel catalog must be synchronized from Slack's API into the local database. These endpoints cover the full lifecycle: listing what has already been synced, kicking off a fresh background sync, and marking specific channels for analysis. The sync model is non-blocking — all heavy Slack API work runs in a FastAPI `BackgroundTask` so the HTTP response is immediate.
+
+---
+
+## GET /api/v1/slack/workspaces/{workspace_id}/channels
+
+Returns a paginated list of channels for a workspace. Supports filtering by channel type, archived status, bot presence, and analysis selection.
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  Toban database UUID of the workspace whose channels you want to list.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="types" type="string[]">
+  Filter by one or more channel types. Repeat the parameter for multiple values: `?types=public&types=private`. Accepted values are `public`, `private`, `mpim` (multi-party direct message group), and `im` (direct message). Omit to return all types.
+</ParamField>
+
+<ParamField query="include_archived" type="boolean" default="false">
+  When `true`, archived channels are included in the results alongside active ones.
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  1-indexed page number. Must be ≥ 1.
+</ParamField>
+
+<ParamField query="page_size" type="integer" default="100">
+  Number of channels per page. Must be between 1 and **1000** inclusive.
+</ParamField>
+
+<ParamField query="bot_installed_only" type="boolean" default="false">
+  When `true`, only channels where Toban's bot is already a member (`has_bot = true`) are returned.
+</ParamField>
+
+<ParamField query="selected_for_analysis_only" type="boolean" default="false">
+  When `true`, only channels explicitly marked for analysis (`is_selected_for_analysis = true`) are returned.
+</ParamField>
+
+### Response
+
+The response shape is determined by the `ChannelService.get_channels_for_workspace` implementation and includes a `channels` array and a `pagination` object.
+
+```json
+{
+  "channels": [
+    {
+      "id": "a1b2c3d4-...",
+      "slack_id": "C01ABC123",
+      "name": "engineering",
+      "type": "public",
+      "purpose": "All engineering discussion",
+      "topic": "Sprint 42",
+      "member_count": 18,
+      "is_archived": false,
+      "has_bot": true,
+      "is_selected_for_analysis": true,
+      "last_sync_at": "2024-05-10T08:01:30"
+    }
+  ],
+  "pagination": {
+    "page": 1,
+    "page_size": 100,
+    "total": 87,
+    "total_pages": 1
+  }
+}
+```
+
+### Example
+
+<CodeGroup>
+```bash cURL — public channels with bot installed
+curl -G "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/channels" \
+  --data-urlencode "types=public" \
+  --data-urlencode "bot_installed_only=true" \
+  --data-urlencode "page_size=50"
+```
+
+```bash cURL — channels selected for analysis
+curl -G "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/channels" \
+  --data-urlencode "selected_for_analysis_only=true"
+```
+</CodeGroup>
+
+---
+
+## POST /api/v1/slack/workspaces/{workspace_id}/channels/sync
+
+Initiates a background synchronization that fetches channels from the Slack API using the workspace's stored bot token and upserts them into Toban's database. The endpoint validates the workspace and its token, then delegates all Slack API calls to the background task.
+
+<Note>
+  This endpoint returns **immediately** with `{"status": "syncing", ...}` — the actual sync continues asynchronously. For large workspaces with many channels, the background task may take several minutes. Poll `GET .../sync-status` to monitor progress.
+</Note>
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  Toban database UUID of the workspace to sync.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="limit" type="integer" default="1000">
+  Maximum number of channels to fetch per Slack API page request. Must be between **100** and **1000**.
+</ParamField>
+
+<ParamField query="sync_all_pages" type="integer (0 or 1)" default="1">
+  Pass `1` to follow Slack's cursor-based pagination and fetch every page of channels. Pass `0` to stop after the first page — useful for quick refreshes in large workspaces.
+</ParamField>
+
+<ParamField query="batch_size" type="integer" default="200">
+  Number of channels to process (upsert into the database) per batch within the background task. Must be between **50** and **1000**. Smaller values reduce per-transaction lock contention.
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "syncing",
+  "message": "Channel synchronization started. This process will continue in the background and may take a few minutes for large workspaces.",
+  "workspace_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+### Example
+
+<CodeGroup>
+```bash cURL — default full sync
+curl -X POST \
+  "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/channels/sync"
+```
+
+```bash cURL — first page only, small batches
+curl -X POST \
+  "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/channels/sync?sync_all_pages=0&batch_size=50"
+```
+
+```json Response
+{
+  "status": "syncing",
+  "message": "Channel synchronization started. This process will continue in the background and may take a few minutes for large workspaces.",
+  "workspace_id": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+</CodeGroup>
+
+---
+
+## POST /api/v1/slack/workspaces/{workspace_id}/channels/select
+
+Marks one or more channels as selected for analysis and, optionally, installs the Toban bot into channels where it is not yet a member. The `is_selected_for_analysis` flag on each `SlackChannel` record controls which channels appear in the analysis pipeline.
+
+### Path Parameters
+
+<ParamField path="workspace_id" type="string (UUID)" required>
+  Toban database UUID of the workspace containing the channels.
+</ParamField>
+
+### Request Body
+
+```json
+{
+  "channel_ids": [
+    "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+  ],
+  "install_bot": true
+}
+```
+
+<ParamField body="channel_ids" type="string[]" required>
+  Array of Toban database UUIDs for the channels to mark as selected. These are the `id` values from the channel list endpoint — **not** Slack channel IDs like `C01ABC123`.
+</ParamField>
+
+<ParamField body="install_bot" type="boolean" default="true">
+  When `true`, the bot will be invited to any selected channel where it is not already a member (`has_bot = false`). Bot installation is necessary to access private channel history. Has no effect on channels where the bot is already present.
+</ParamField>
+
+### Response
+
+The response is determined by `ChannelService.select_channels_for_analysis` and summarizes how many channels were selected and how many bot installations were attempted.
+
+```json
+{
+  "selected_count": 2,
+  "bot_installed_count": 1,
+  "already_installed_count": 1,
+  "channels": [
+    {
+      "id": "a1b2c3d4-...",
+      "name": "engineering",
+      "is_selected_for_analysis": true,
+      "has_bot": true
+    }
+  ]
+}
+```
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST \
+  "https://api.example.com/api/v1/slack/workspaces/550e8400-e29b-41d4-a716-446655440000/channels/select" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channel_ids": [
+      "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "b2c3d4e5-f6a7-8901-bcde-f12345678901"
+    ],
+    "install_bot": true
+  }'
+```
+</CodeGroup>

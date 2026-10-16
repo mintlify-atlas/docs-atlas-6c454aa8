@@ -1,0 +1,198 @@
+---
+title: "Slack Messages API — Sync Channel Messages"
+sidebarTitle: "Messages"
+description: "REST endpoints and services for syncing Slack messages into Toban's database, including thread replies, for use in LLM-powered analysis."
+---
+
+Toban does not query the Slack API at analysis time. Instead, messages are synced ahead of time from the Slack API into PostgreSQL `SlackMessage` records, where they can be efficiently queried, filtered, and assembled into prompts for LLM analysis. The primary entry point for syncing messages before analysis is the integrations-scoped endpoint described below, which handles workspace and channel resolution automatically and returns detailed sync statistics.
+
+---
+
+## POST /api/v1/integrations/{integration_id}/resources/{resource_id}/sync-messages
+
+Syncs messages for a specific Slack channel that is registered as a resource under a team integration. Internally the endpoint resolves the integration → workspace → channel chain, creates a `SlackChannel` record from the `ServiceResource` if one does not yet exist, and calls `SlackMessageService.sync_channel_messages` synchronously so that the response contains real sync statistics the caller can use immediately.
+
+### Path Parameters
+
+<ParamField path="integration_id" type="string (UUID)" required>
+  The Toban UUID of the team integration (created via `POST /api/v1/integrations/slack`).
+</ParamField>
+
+<ParamField path="resource_id" type="string (UUID)" required>
+  The Toban UUID of the `ServiceResource` representing the channel (type `SLACK_CHANNEL`). Obtain these from `GET /api/v1/integrations/{integration_id}/resources`.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="start_date" type="string (ISO 8601 datetime)">
+  Beginning of the message window to sync. Defaults to **30 days before `end_date`** when omitted. Pass an explicit value to sync a narrower or wider historical window.
+
+  Example: `2024-04-01T00:00:00`
+</ParamField>
+
+<ParamField query="end_date" type="string (ISO 8601 datetime)">
+  End of the message window to sync. Defaults to the **current UTC time** when omitted.
+
+  Example: `2024-05-01T00:00:00`
+</ParamField>
+
+<ParamField query="include_replies" type="boolean" default="true">
+  When `true`, thread reply messages are fetched alongside top-level messages during the initial sync pass.
+</ParamField>
+
+<ParamField query="sync_threads" type="boolean" default="true">
+  When `true`, an additional pass is made after the main message sync to explicitly fetch replies for thread parent messages. Use in combination with `include_replies` for the most complete thread data.
+</ParamField>
+
+<ParamField query="thread_days" type="integer" default="30">
+  How many days of message history to scan when looking for thread parent messages during the `sync_threads` pass. Must be between **1** and **90**.
+</ParamField>
+
+### Response
+
+<ResponseField name="status" type="string">
+  `"success"` on a completed sync.
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Human-readable summary, e.g. `"Synced 142 messages and 38 thread replies"`.
+</ResponseField>
+
+<ResponseField name="sync_results" type="object">
+  Detailed counters returned by `SlackMessageService.sync_channel_messages`.
+
+  <Expandable title="sync_results fields">
+    <ResponseField name="new_message_count" type="integer">
+      Number of new top-level messages inserted into the database during this sync run.
+    </ResponseField>
+
+    <ResponseField name="replies_synced" type="integer">
+      Number of thread reply messages inserted during this sync run.
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="workspace_id" type="string (UUID)">
+  The Toban database UUID of the resolved `SlackWorkspace`.
+</ResponseField>
+
+<ResponseField name="channel_id" type="string (UUID)">
+  The Toban database UUID of the resolved `SlackChannel`.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+```bash cURL — sync last 30 days with threads
+curl -X POST \
+  "https://api.example.com/api/v1/integrations/d290f1ee-6c54-4b01-90e6-d701748f0851/resources/a1b2c3d4-e5f6-7890-abcd-ef1234567890/sync-messages" \
+  -H "Authorization: Bearer <your-auth-token>"
+```
+
+```bash cURL — custom date window, no threads
+curl -X POST \
+  "https://api.example.com/api/v1/integrations/d290f1ee-6c54-4b01-90e6-d701748f0851/resources/a1b2c3d4-e5f6-7890-abcd-ef1234567890/sync-messages?start_date=2024-01-01T00:00:00&end_date=2024-03-31T23:59:59&sync_threads=false" \
+  -H "Authorization: Bearer <your-auth-token>"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Synced 142 messages and 38 thread replies",
+  "sync_results": {
+    "new_message_count": 142,
+    "replies_synced": 38
+  },
+  "workspace_id": "550e8400-e29b-41d4-a716-446655440000",
+  "channel_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+```
+</CodeGroup>
+
+---
+
+## Message Data Model
+
+Each Slack message is stored as a `SlackMessage` row in PostgreSQL. The table is indexed for efficient time-range and thread queries. The fields below are sourced directly from `app/models/slack.py`.
+
+<Expandable title="Core identifier fields">
+  <ResponseField name="id" type="UUID">
+    Toban's internal database primary key for the message.
+  </ResponseField>
+
+  <ResponseField name="slack_id" type="string">
+    Slack's `client_msg_id` for the message. This is a client-generated UUID-like string present on messages sent by real users.
+  </ResponseField>
+
+  <ResponseField name="slack_ts" type="string">
+    Slack's canonical message timestamp in Unix epoch format with microseconds (e.g. `"1715000000.123456"`). Acts as a unique identifier within a channel. Used as the `thread_ts` value for thread parents.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Content fields">
+  <ResponseField name="text" type="string | null">
+    The raw message text as returned by the Slack API. May include Slack mrkdwn formatting, user mention tokens like `<@U01ABC>`, and emoji shortcodes.
+  </ResponseField>
+
+  <ResponseField name="processed_text" type="string | null">
+    The message text after resolving user mentions and other post-processing. Populated by the analysis pipeline; `null` until the message has been processed.
+  </ResponseField>
+
+  <ResponseField name="message_type" type="string">
+    Slack message subtype. Typically `"message"` for human messages, or `"bot_message"` for bot-generated content.
+  </ResponseField>
+
+  <ResponseField name="has_attachments" type="boolean">
+    `true` if the message includes Slack attachments (legacy rich-message payloads). The full attachment JSON is stored in the `attachments` JSONB column.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Timestamp and datetime fields">
+  <ResponseField name="message_datetime" type="datetime">
+    The message timestamp converted to a PostgreSQL `DATETIME` for efficient range queries. Indexed. Derived from `slack_ts`.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Reaction fields">
+  <ResponseField name="reaction_count" type="integer">
+    Denormalized count of all emoji reactions on the message. Updated during sync. Used by the analysis pipeline to identify high-engagement messages without joining the `SlackReaction` table.
+  </ResponseField>
+</Expandable>
+
+<Expandable title="Relationship fields">
+  <ResponseField name="channel_id" type="UUID (FK → SlackChannel)">
+    Foreign key to the parent `SlackChannel` record.
+  </ResponseField>
+
+  <ResponseField name="user_id" type="UUID (FK → SlackUser) | null">
+    Foreign key to the `SlackUser` who sent the message. `null` for system messages, bot messages without a matched user, or messages where the user has not yet been synced.
+  </ResponseField>
+</Expandable>
+
+---
+
+## Thread Handling
+
+Slack threads are first-class citizens in the data model. Toban uses three fields to represent the thread structure of every message.
+
+<ResponseField name="is_thread_parent" type="boolean">
+  `true` if this message started a thread (i.e., other users have replied to it). A message is considered a thread parent when its `reply_count > 0` and either `thread_ts` equals its own `slack_ts` or `thread_ts` is `null`.
+</ResponseField>
+
+<ResponseField name="is_thread_reply" type="boolean">
+  `true` if this message is a reply within a thread rather than a top-level channel message.
+</ResponseField>
+
+<ResponseField name="thread_ts" type="string | null">
+  The `slack_ts` value of the thread's root message. For top-level messages this is `null`. For replies it points back to the parent, forming the thread chain. Indexed to enable fast `WHERE thread_ts = ?` lookups when loading all replies in a thread.
+</ResponseField>
+
+### How threads are synced
+
+During a sync the service fetches all messages in the specified date window. For each message that has `reply_count > 0`, it marks the message as `is_thread_parent = true`. When `sync_threads=true` (the default), a second pass uses Slack's `conversations.replies` API to fetch the full reply chain for each thread parent, storing each reply with `is_thread_reply = true` and the correct `thread_ts`.
+
+<Note>
+  Thread replies may exist outside the original `start_date` / `end_date` window if a thread was started before the window but received replies within it. The `thread_days` parameter controls how far back the thread pass scans for parent messages.
+</Note>
+
+The `reply_count` and `reply_users_count` fields on the parent record reflect Slack's reported counts, which may temporarily exceed the number of stored replies until a full thread sync completes.

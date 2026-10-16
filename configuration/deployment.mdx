@@ -1,0 +1,268 @@
+---
+title: "Deploy Toban to Production on AWS"
+sidebarTitle: "Deployment"
+description: "Deploy Toban's backend to AWS Elastic Beanstalk and frontend to S3+CloudFront using GitHub Actions. Includes CDK infrastructure setup and required secrets."
+---
+
+Toban Contribution Viewer's production infrastructure runs entirely on AWS. The FastAPI backend is hosted on **Elastic Beanstalk** (Python 3.12), the React frontend is served from an **S3 bucket** behind a **CloudFront** distribution, and the database is an **RDS PostgreSQL** instance. Both the backend and frontend are deployed automatically via **GitHub Actions** on every push to `main` — the backend workflow triggers when files under `backend/` change, and the frontend workflow triggers when files under `frontend/` change. Either workflow can also be triggered manually from the GitHub Actions UI.
+
+<Note>
+  All three deployment workflows (`infrastructure-deploy.yml`, `backend-deploy.yml`, `frontend-deploy.yml`) support **manual triggering** via `workflow_dispatch`. Navigate to **Actions → [workflow name] → Run workflow** in your GitHub repository to deploy on demand without pushing a commit.
+</Note>
+
+---
+
+## Infrastructure with AWS CDK
+
+Toban's AWS resources are defined as code in `infrastructure/cdk/` using the AWS CDK (TypeScript). The CDK project declares three stacks:
+
+| Stack | What it creates |
+|---|---|
+| **DatabaseStack** | RDS PostgreSQL instance, security groups, and Secrets Manager entries |
+| **BackendStack** | Elastic Beanstalk application and environment (Python 3.12 on Amazon Linux 2023) |
+| **FrontendStack** | S3 bucket for static assets and a CloudFront distribution |
+
+### First-time CDK setup
+
+<Steps>
+  <Step title="Install CDK prerequisites">
+    You need Node.js 18+, the AWS CLI configured with appropriate credentials, and the CDK CLI:
+
+    ```bash
+    npm install -g aws-cdk
+    ```
+  </Step>
+
+  <Step title="Install CDK project dependencies">
+    ```bash
+    cd infrastructure/cdk
+    npm install
+    ```
+  </Step>
+
+  <Step title="Copy and edit the CDK environment file">
+    ```bash
+    cp .env.example .env
+    # Edit .env with your AWS account ID, region, and any stack-specific settings
+    ```
+  </Step>
+
+  <Step title="Bootstrap your AWS environment">
+    CDK bootstrapping provisions an S3 bucket and IAM roles that CDK needs to deploy assets. This only needs to be run once per AWS account/region:
+
+    ```bash
+    npx cdk bootstrap aws://YOUR_ACCOUNT_ID/YOUR_REGION
+    # Example:
+    npx cdk bootstrap aws://123456789012/us-east-1
+    ```
+  </Step>
+
+  <Step title="Preview then deploy all stacks">
+    ```bash
+    # Review the planned changes first
+    npm run diff
+
+    # Deploy all three stacks
+    npm run deploy
+    ```
+
+    Note the **S3 bucket name** and **CloudFront distribution ID** printed in the CDK output — you will need them as GitHub Secrets.
+  </Step>
+</Steps>
+
+<Tip>
+  After the initial CDK deployment, infrastructure changes pushed to `main` are applied automatically by the `infrastructure-deploy.yml` GitHub Actions workflow. You only need to run `npm run deploy` manually for the first-time setup or when iterating on infrastructure changes locally.
+</Tip>
+
+---
+
+## GitHub Actions Deployment Workflows
+
+<Tabs>
+  <Tab title="Backend">
+
+    ### Backend Deployment Workflow
+
+    **File:** `.github/workflows/backend-deploy.yml`
+
+    **Triggered by:** Push to `main` on any path matching `backend/**`, or `workflow_dispatch`.
+
+    #### What the workflow does
+
+    1. Checks out the repository and sets up Python 3.12.
+    2. Installs dependencies from `backend/requirements.txt` plus `pytest`, `pylint`, and `black`.
+    3. Runs the full test suite with `pytest` and enforces linting with `pylint` and `black --check`.
+    4. Configures AWS credentials from repository secrets.
+    5. Creates a `backend.zip` deployment package (excluding `__pycache__`, `.git`, and `.pytest_cache`).
+    6. Deploys the package to Elastic Beanstalk using [`einaregilsson/beanstalk-deploy`](https://github.com/einaregilsson/beanstalk-deploy), labelled with the commit SHA.
+    7. Sends a Slack notification to the `#deployments` channel with the outcome (requires `SLACK_WEBHOOK_URL`; failure of this step does not fail the deployment).
+
+    #### Required GitHub Secrets
+
+    Add these secrets in **Repository Settings → Secrets and variables → Actions**:
+
+    | Secret | Description |
+    |---|---|
+    | `AWS_ACCESS_KEY_ID` | AWS IAM access key with Elastic Beanstalk deploy permissions |
+    | `AWS_SECRET_ACCESS_KEY` | Corresponding AWS secret key |
+    | `AWS_REGION` | AWS region where your EB environment lives (e.g., `us-east-1`) |
+    | `EB_APPLICATION_NAME` | Elastic Beanstalk application name (e.g., `TobanContributionViewer`) |
+    | `EB_ENVIRONMENT_NAME` | Elastic Beanstalk environment name (e.g., `TobanContributionViewer-prod`) |
+    | `DATABASE_URL` | Production PostgreSQL connection string for EB environment variables |
+    | `SUPABASE_URL` | Supabase project URL |
+    | `SUPABASE_KEY` | Supabase service role key |
+    | `SUPABASE_JWT_SECRET` | Supabase JWT signing secret |
+    | `OPENROUTER_API_KEY` | OpenRouter API key for LLM inference |
+    | `SLACK_WEBHOOK_URL` | *(Optional)* Incoming webhook URL for deployment notifications |
+
+    <Note>
+      Environment variables such as `DATABASE_URL` and `SUPABASE_KEY` must also be configured directly in the Elastic Beanstalk environment's **Configuration → Software** settings (or via `eb-config.json`). The GitHub Secrets listed above are used by the deployment workflow itself and to set those EB environment properties during deployment.
+    </Note>
+
+  </Tab>
+  <Tab title="Frontend">
+
+    ### Frontend Deployment Workflow
+
+    **File:** `.github/workflows/frontend-deploy.yml`
+
+    **Triggered by:** Push to `main` on any path matching `frontend/**`, or `workflow_dispatch`.
+
+    #### What the workflow does
+
+    1. Checks out the repository and sets up Node.js 20 with npm caching.
+    2. Installs dependencies with `npm ci` inside `frontend/`.
+    3. Runs the test suite with `npm test`, then enforces code quality with `npm run lint` and `npm run typecheck`.
+    4. Builds the production bundle with `npm run build`, injecting `VITE_API_URL` and Supabase configuration from secrets as environment variables.
+    5. Configures AWS credentials from repository secrets.
+    6. Syncs the compiled `frontend/dist/` directory to the S3 bucket with `aws s3 sync --delete` (removes stale files).
+    7. Creates a CloudFront invalidation for `/*` to purge cached assets globally.
+    8. Sends a Slack notification to the `#deployments` channel with the outcome.
+
+    #### Required GitHub Secrets
+
+    | Secret | Description |
+    |---|---|
+    | `AWS_ACCESS_KEY_ID` | AWS IAM access key with S3 and CloudFront permissions |
+    | `AWS_SECRET_ACCESS_KEY` | Corresponding AWS secret key |
+    | `AWS_REGION` | AWS region (e.g., `us-east-1`) |
+    | `S3_BUCKET_NAME` | Name of the S3 bucket created by CDK's FrontendStack |
+    | `CLOUDFRONT_DISTRIBUTION_ID` | CloudFront distribution ID from CDK output |
+    | `SITE_DOMAIN` | Your custom domain (e.g., `app.example.com`) |
+    | `FRONTEND_API_URL` | Full backend API URL injected as `VITE_API_URL` at build time (e.g., `https://api.example.com/api/v1`) |
+    | `VITE_SUPABASE_URL` | Supabase project URL for the browser client |
+    | `VITE_SUPABASE_ANON_KEY` | Supabase anon/public key for the browser client |
+    | `SLACK_WEBHOOK_URL` | *(Optional)* Incoming webhook URL for deployment notifications |
+
+  </Tab>
+</Tabs>
+
+---
+
+## Database Migrations
+
+Toban uses **Alembic** to manage PostgreSQL schema migrations. The migration files live in `backend/alembic/`.
+
+### Running migrations manually
+
+After deploying a new backend version that includes schema changes, apply all pending migrations with:
+
+```bash
+# From inside the backend directory or container
+alembic upgrade head
+```
+
+### Running migrations against Docker Compose
+
+A helper script is provided at `backend/scripts/run_migrations.sh`. It checks that the `tobancv-backend` container is running and then executes Alembic inside it:
+
+```bash
+# From the project root
+./backend/scripts/run_migrations.sh
+```
+
+The script output:
+
+```bash
+Running database migrations...
+✅ Database migrations completed successfully
+```
+
+Under the hood it runs:
+
+```bash
+docker exec tobancv-backend alembic upgrade head
+```
+
+### Running migrations in production (Elastic Beanstalk)
+
+Connect to your production database and run Alembic with your production `DATABASE_URL`:
+
+```bash
+DATABASE_URL=postgresql://user:pass@your-rds-host/tobancv alembic upgrade head
+```
+
+<Warning>
+  Always run `alembic upgrade head` **before** routing traffic to a new backend version. Elastic Beanstalk deployments do not run migrations automatically.
+</Warning>
+
+---
+
+## Health Check
+
+The backend exposes a lightweight health check endpoint at `GET /health`. CloudFront, load balancers, and uptime monitors can poll this endpoint to verify the service is running:
+
+```bash
+curl https://api.example.com/health
+```
+
+```json
+{"status": "ok"}
+```
+
+The endpoint returns HTTP `200` when the application is up. It does not check database connectivity, so it is safe to use as a shallow liveness probe.
+
+---
+
+## First-Time Full Deployment Checklist
+
+<Steps>
+  <Step title="Provision infrastructure with CDK">
+    Follow the [Infrastructure with AWS CDK](#infrastructure-with-aws-cdk) steps above to create the DatabaseStack, BackendStack, and FrontendStack. Note the outputs for the EB environment name, S3 bucket name, and CloudFront distribution ID.
+  </Step>
+
+  <Step title="Add GitHub Secrets">
+    In **Repository Settings → Secrets and variables → Actions**, add all secrets listed in both the [Backend](#required-github-secrets) and [Frontend](#required-github-secrets-1) sections above.
+  </Step>
+
+  <Step title="Configure Elastic Beanstalk environment variables">
+    In the AWS Console, navigate to your Elastic Beanstalk environment → **Configuration → Software** and set `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`, and `OPENROUTER_API_KEY` as environment properties.
+  </Step>
+
+  <Step title="Set up Supabase">
+    Create a Supabase project, copy the **URL**, **service role key**, **anon key**, and **JWT secret** into the appropriate GitHub Secrets and EB environment variables. Add your production frontend domain to **Authentication → URL Configuration → Redirect URLs**.
+  </Step>
+
+  <Step title="Push to main to trigger deployment">
+    Commit and push to `main`. Both the backend and frontend workflows will run. Monitor progress in the **Actions** tab.
+  </Step>
+
+  <Step title="Run database migrations">
+    After the backend is deployed and the EB environment is healthy, apply the initial schema:
+
+    ```bash
+    DATABASE_URL=postgresql://user:pass@your-rds-host/tobancv alembic upgrade head
+    ```
+  </Step>
+
+  <Step title="Verify the deployment">
+    ```bash
+    # Check the health endpoint
+    curl https://your-eb-domain.elasticbeanstalk.com/health
+    # Expected: {"status": "ok"}
+
+    # Open the frontend
+    open https://app.example.com
+    ```
+  </Step>
+</Steps>

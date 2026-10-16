@@ -1,0 +1,240 @@
+---
+title: "Self-Host Toban on AWS or Any Cloud"
+sidebarTitle: "Self-Hosting"
+description: "Deploy Toban's FastAPI backend to AWS Elastic Beanstalk and the React frontend to S3+CloudFront using GitHub Actions CI/CD or the AWS CDK."
+---
+
+Toban Contribution Viewer is fully open-source and designed to run on infrastructure you own and control. There is no managed cloud service — you bring your own AWS account, your own Supabase project, and your own OpenRouter API key, and deploy entirely within your environment. This page covers the two supported production deployment paths: automated deployment via the AWS CDK (which provisions all resources from code) and the GitHub Actions CI/CD pipelines that deploy on every push to `main`.
+
+## Architecture Overview
+
+A production Toban deployment consists of three infrastructure layers:
+
+| Layer | Service | Description |
+|---|---|---|
+| **Backend API** | AWS Elastic Beanstalk | Hosts the FastAPI Python application on Amazon Linux 2023 with Python 3.9 |
+| **Frontend** | AWS S3 + CloudFront | Serves the compiled React/Vite static bundle via a global CDN |
+| **Database** | AWS RDS PostgreSQL | Managed PostgreSQL 13+ instance in a private VPC subnet |
+
+The backend and database live inside a VPC. Elastic Beanstalk instances connect to RDS through a dedicated security group rule. CloudFront sits in front of the S3 bucket and handles HTTPS termination, cache invalidation, and custom domain routing.
+
+## Required Accounts and Credentials
+
+Before deploying, confirm you have the following:
+
+- **AWS account** with IAM permissions for Elastic Beanstalk, S3, CloudFront, RDS, VPC, IAM, and Secrets Manager
+- **Supabase project** — Project URL, Service Role Key, Anon Key, and JWT Secret
+- **OpenRouter API key** — for LLM-powered analysis
+- **Slack app** — Client ID, Client Secret, and Signing Secret (entered in the Toban UI post-deploy, not as environment variables)
+- **AWS CDK CLI** (for CDK deployments) — `npm install -g aws-cdk`
+- **AWS CLI** configured with credentials that have the permissions listed above
+
+## AWS CDK Deployment
+
+The `infrastructure/cdk` directory contains a full TypeScript CDK project that provisions three stacks:
+
+1. **DatabaseStack** — RDS PostgreSQL instance, VPC, and security groups
+2. **BackendStack** — Elastic Beanstalk application and environment with IAM instance profile
+3. **FrontendStack** — S3 bucket and CloudFront distribution
+
+<Steps>
+  <Step title="Install CDK Dependencies">
+    ```bash
+    cd infrastructure/cdk
+    npm install
+    ```
+  </Step>
+
+  <Step title="Configure the CDK Environment">
+    Copy the example configuration and set your AWS account details:
+
+    ```bash
+    cp .env.example .env
+    # Edit .env with your AWS_ACCOUNT_ID, AWS_REGION, and stack settings
+    ```
+  </Step>
+
+  <Step title="Bootstrap the AWS Environment">
+    CDK bootstrapping provisions the S3 bucket and IAM roles that CDK uses internally to manage deployments. This only needs to be run once per AWS account and region:
+
+    ```bash
+    # Acknowledge CDK notices
+    ./bootstrap.sh
+
+    # Bootstrap CDK for your account and region
+    npx cdk bootstrap aws://YOUR_ACCOUNT_ID/YOUR_REGION
+    ```
+
+    Replace `YOUR_ACCOUNT_ID` with your 12-digit AWS account ID and `YOUR_REGION` with your target region (e.g., `us-east-1`).
+  </Step>
+
+  <Step title="Preview the Changes">
+    Run a diff to see what CDK will create before committing:
+
+    ```bash
+    npm run diff
+    ```
+  </Step>
+
+  <Step title="Deploy All Stacks">
+    Deploy the database, backend, and frontend stacks in a single command:
+
+    ```bash
+    npm run deploy
+    ```
+
+    CDK deploys stacks in dependency order: `DatabaseStack` first, then `BackendStack` (which references the RDS instance ARN and secret), then `FrontendStack`.
+
+    Stack outputs (Elastic Beanstalk endpoint, CloudFront distribution ID, S3 bucket name) are printed at the end of the deploy and needed when configuring GitHub Actions secrets.
+  </Step>
+
+  <Step title="Configure Backend Environment Variables">
+    After the Elastic Beanstalk environment is running, set the required environment variables through the AWS Console or CLI:
+
+    ```bash
+    aws elasticbeanstalk update-environment \
+      --environment-name TobanContributionViewer-prod \
+      --option-settings \
+        Namespace=aws:elasticbeanstalk:application:environment,OptionName=DATABASE_URL,Value=YOUR_RDS_URL \
+        Namespace=aws:elasticbeanstalk:application:environment,OptionName=SUPABASE_URL,Value=YOUR_SUPABASE_URL \
+        Namespace=aws:elasticbeanstalk:application:environment,OptionName=SUPABASE_KEY,Value=YOUR_SERVICE_ROLE_KEY \
+        Namespace=aws:elasticbeanstalk:application:environment,OptionName=SUPABASE_JWT_SECRET,Value=YOUR_JWT_SECRET \
+        Namespace=aws:elasticbeanstalk:application:environment,OptionName=OPENROUTER_API_KEY,Value=YOUR_OPENROUTER_KEY
+    ```
+  </Step>
+
+  <Step title="Apply Database Migrations">
+    SSH into the Elastic Beanstalk instance or run migrations as part of the deployment hook:
+
+    ```bash
+    # From within the EB instance or via eb ssh
+    cd /var/app/current
+    alembic upgrade head
+    ```
+  </Step>
+</Steps>
+
+<Tip>
+  To tear down all resources when no longer needed, run `npx cdk destroy --all` from the `infrastructure/cdk` directory. Use with caution in production — this deletes your RDS instance and all S3 objects.
+</Tip>
+
+## GitHub Actions CI/CD
+
+Three workflow files in `.github/workflows` handle automated deployments whenever code is pushed to the `main` branch:
+
+| Workflow file | Purpose |
+|---|---|
+| `infrastructure-deploy.yml` | Deploys CDK infrastructure changes |
+| `backend-deploy.yml` | Runs tests and deploys to Elastic Beanstalk |
+| `frontend-deploy.yml` | Runs tests and deploys to S3/CloudFront |
+
+### Backend Deployment Secrets
+
+Add the following secrets to your GitHub repository (**Settings → Secrets and variables → Actions**):
+
+<Accordion title="AWS and Elastic Beanstalk secrets">
+  | Secret | Description |
+  |---|---|
+  | `AWS_ACCESS_KEY_ID` | IAM access key with Elastic Beanstalk, S3, and related permissions |
+  | `AWS_SECRET_ACCESS_KEY` | Corresponding IAM secret key |
+  | `AWS_REGION` | AWS region where your EB environment is deployed (e.g., `us-east-1`) |
+  | `AWS_ACCOUNT_ID` | Your 12-digit AWS account ID |
+  | `EB_APPLICATION_NAME` | Elastic Beanstalk application name (e.g., `TobanContributionViewer`) |
+  | `EB_ENVIRONMENT_NAME` | Elastic Beanstalk environment name (e.g., `TobanContributionViewer-prod`) |
+</Accordion>
+
+<Accordion title="Backend environment variable secrets">
+  | Secret | Description |
+  |---|---|
+  | `DATABASE_URL` | Production PostgreSQL connection string |
+  | `SUPABASE_URL` | Your Supabase project URL |
+  | `SUPABASE_KEY` | Your Supabase service role key |
+  | `SUPABASE_JWT_SECRET` | Your Supabase JWT signing secret |
+  | `OPENROUTER_API_KEY` | Your OpenRouter API key |
+</Accordion>
+
+### Frontend Deployment Secrets
+
+<Accordion title="S3, CloudFront, and frontend secrets">
+  | Secret | Description |
+  |---|---|
+  | `AWS_ACCESS_KEY_ID` | IAM access key with S3 and CloudFront permissions |
+  | `AWS_SECRET_ACCESS_KEY` | Corresponding IAM secret key |
+  | `AWS_REGION` | Region where the S3 bucket is located |
+  | `S3_BUCKET_NAME` | Name of the S3 bucket used for static hosting |
+  | `CLOUDFRONT_DISTRIBUTION_ID` | CloudFront distribution ID (from CDK output or console) |
+  | `SITE_DOMAIN` | Your production domain name (e.g., `app.yoursite.com`) |
+  | `API_DOMAIN` | The Elastic Beanstalk endpoint URL for the backend API |
+  | `FRONTEND_API_URL` | Full URL the frontend uses to reach the API |
+  | `SUPABASE_URL` | Your Supabase project URL |
+  | `SUPABASE_ANON_KEY` | Your Supabase anon/public key |
+  | `SUPABASE_JWT_SECRET` | Your Supabase JWT signing secret |
+</Accordion>
+
+### Manual Deployment Trigger
+
+All three workflows support `workflow_dispatch`, which lets you trigger a deployment manually from the GitHub Actions UI without pushing new code:
+
+1. Navigate to your repository on GitHub.
+2. Click the **Actions** tab.
+3. Select the workflow you want to run (`backend-deploy.yml` or `frontend-deploy.yml`).
+4. Click **Run workflow**, choose the `main` branch, and confirm.
+
+This is useful for redeploying after updating GitHub Secrets or recovering from a failed deployment without making a code change.
+
+## Slack OAuth Redirect URLs
+
+Slack requires HTTPS redirect URLs for its OAuth flow. In production this is satisfied automatically by your CloudFront distribution. In local development you need a public HTTPS tunnel.
+
+### Local Development with ngrok
+
+Use the provided `start-ngrok.sh` script to create an HTTPS tunnel to the frontend dev server (port 5173):
+
+```bash
+# Make the script executable
+chmod +x ./scripts/start-ngrok.sh
+
+# Start ngrok with your auth token
+./scripts/start-ngrok.sh your_ngrok_authtoken
+
+# Or create a .env.ngrok file first
+echo "NGROK_AUTHTOKEN=your_ngrok_authtoken" > .env.ngrok
+./scripts/start-ngrok.sh
+```
+
+The script outputs your tunnel URL, for example:
+
+```
+Tunnel Status  app  online  https://xyz-123-abc.ngrok-free.app -> http://localhost:5173
+```
+
+Once you have the URL:
+
+1. Open your `.env.docker` file and set:
+   ```ini
+   NGROK_URL=https://xyz-123-abc.ngrok-free.app
+   NGROK_AUTHTOKEN=your_ngrok_authtoken
+   ```
+2. Restart the Docker stack so the backend picks up the new CORS origin:
+   ```bash
+   ./docker-dev.sh restart
+   ```
+3. In the Slack app settings at [api.slack.com/apps](https://api.slack.com/apps), go to **OAuth & Permissions → Redirect URLs** and add:
+   ```
+   https://xyz-123-abc.ngrok-free.app/auth/slack/callback
+   ```
+4. Access Toban through the ngrok URL — `https://xyz-123-abc.ngrok-free.app` — to ensure the full OAuth round-trip uses HTTPS.
+
+<Note>
+  Free ngrok URLs are randomly assigned and change every time you restart ngrok. When this happens you must update both the `NGROK_URL` value in `.env.docker` **and** the redirect URL in your Slack app settings. Upgrade to ngrok Pro for a fixed reserved subdomain to avoid this friction during extended development periods.
+</Note>
+
+### Production Redirect URL
+
+In production, add your CloudFront domain to the Slack app's redirect URL list:
+
+```
+https://app.yoursite.com/auth/slack/callback
+```
+
+Slack enforces that OAuth redirect URLs use HTTPS and exactly match a registered URL. Ensure your `SITE_DOMAIN` GitHub Secret and the URL registered in your Slack app settings are identical, including the protocol and path.

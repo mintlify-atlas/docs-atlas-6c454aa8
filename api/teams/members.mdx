@@ -1,0 +1,455 @@
+---
+title: "Team Members API — Invite and Manage Members"
+sidebarTitle: "Members"
+description: "REST endpoints to list, add, update roles, and remove members from a Toban team. Member roles control access to integrations and reports."
+---
+
+Member management is how you control who can see and interact with a team's integrations, contribution data, and reports. Each member holds a **role** that determines their permissions — from read-only `viewer` access all the way to full `owner` control. You can list current members, add new ones directly, send email invitations to external collaborators, update roles, and remove members at any time. All endpoints require authentication and are scoped to a specific team via the `team_id` path parameter.
+
+---
+
+## Role reference
+
+The following roles are available. Assign the least-privileged role appropriate for each member.
+
+| Role | Description | Can manage members | Can manage integrations | Can delete team |
+|------|-------------|:-----------------:|:-----------------------:|:---------------:|
+| `owner` | Full control over the team | ✅ | ✅ | ✅ |
+| `admin` | Administrative access, cannot delete the team | ✅ | ✅ | ❌ |
+| `member` | Standard contributor access | ❌ | ❌ | ❌ |
+| `viewer` | Read-only access to reports and dashboards | ❌ | ❌ | ❌ |
+
+<Note>
+  Only **owners** can change or remove another owner's role. Attempting to demote or remove an owner as an `admin`, `member`, or `viewer` will return `403 Forbidden`.
+</Note>
+
+---
+
+## List team members
+
+Returns a filtered list of members for the specified team.
+
+```
+GET /api/v1/teams/{team_id}/members
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team whose members you want to list.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="status" type="string" default="active">
+  Filter results by invitation status. Accepted values:
+
+  - `active` — confirmed, active members (default)
+  - `pending` — invited but not yet accepted
+  - `expired` — invitation expired before acceptance
+  - `inactive` — members who have been deactivated
+  - `all` — return members in every status
+</ParamField>
+
+### Response
+
+A JSON array of `TeamMemberResponse` objects.
+
+<ResponseField name="id" type="uuid" required>
+  Unique identifier for this team membership record.
+</ResponseField>
+
+<ResponseField name="team_id" type="uuid" required>
+  UUID of the team this record belongs to.
+</ResponseField>
+
+<ResponseField name="user_id" type="string" required>
+  The member's user ID. For pending invitations this will be a temporary placeholder value.
+</ResponseField>
+
+<ResponseField name="email" type="string | null">
+  The member's email address.
+</ResponseField>
+
+<ResponseField name="display_name" type="string | null">
+  The member's display name.
+</ResponseField>
+
+<ResponseField name="role" type="string" required>
+  The member's role in the team: `owner`, `admin`, `member`, or `viewer`.
+</ResponseField>
+
+<ResponseField name="invitation_status" type="string" required>
+  Current status of the membership invitation: `active`, `pending`, `expired`, or `inactive`.
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime" required>
+  ISO 8601 timestamp when the member record was created.
+</ResponseField>
+
+<ResponseField name="last_active_at" type="datetime | null">
+  ISO 8601 timestamp of the member's most recent activity in Toban. `null` if the member has never been active.
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members?status=active" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+[
+  {
+    "id": "018e2f3b-0001-7d4e-9f0a-bc1234567891",
+    "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+    "user_id": "usr_abc123",
+    "email": "alice@acme.io",
+    "display_name": "Alice",
+    "role": "owner",
+    "invitation_status": "active",
+    "created_at": "2024-03-01T09:00:00Z",
+    "last_active_at": "2024-06-20T08:45:00Z"
+  },
+  {
+    "id": "018e2f3b-0002-7d4e-9f0a-bc1234567892",
+    "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+    "user_id": "usr_def456",
+    "email": "bob@acme.io",
+    "display_name": "Bob",
+    "role": "member",
+    "invitation_status": "active",
+    "created_at": "2024-03-15T11:00:00Z",
+    "last_active_at": "2024-06-19T17:30:00Z"
+  }
+]
+```
+</CodeGroup>
+
+---
+
+## Get a single team member
+
+Retrieves a specific membership record by its ID.
+
+```
+GET /api/v1/teams/{team_id}/members/{member_id}
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team.
+</ParamField>
+
+<ParamField path="member_id" type="uuid" required>
+  The UUID of the membership record to retrieve.
+</ParamField>
+
+### Response
+
+A single `TeamMemberResponse` object. Returns `404 Not Found` if the member record does not exist within the given team.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members/018e2f3b-0002-7d4e-9f0a-bc1234567892" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "id": "018e2f3b-0002-7d4e-9f0a-bc1234567892",
+  "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "user_id": "usr_def456",
+  "email": "bob@acme.io",
+  "display_name": "Bob",
+  "role": "member",
+  "invitation_status": "active",
+  "created_at": "2024-03-15T11:00:00Z",
+  "last_active_at": "2024-06-19T17:30:00Z"
+}
+```
+</CodeGroup>
+
+---
+
+## Add a team member
+
+Directly adds a user to the team. Use this endpoint when the user's account already exists and you know their `user_id`. To send an email invitation to an external user instead, see [Invite a member](#invite-a-team-member).
+
+```
+POST /api/v1/teams/{team_id}/members
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team to add the member to.
+</ParamField>
+
+### Request body
+
+<ParamField body="user_id" type="string" required>
+  The user ID of the account to add.
+</ParamField>
+
+<ParamField body="role" type="string" required>
+  The role to assign: `owner`, `admin`, `member`, or `viewer`.
+</ParamField>
+
+<ParamField body="email" type="string">
+  The user's email address (optional, used for display purposes).
+</ParamField>
+
+<ParamField body="display_name" type="string">
+  A display name to use for this member in the team context.
+</ParamField>
+
+<ParamField body="invitation_status" type="string" default="pending">
+  Initial invitation status. Defaults to `pending`.
+</ParamField>
+
+### Response
+
+Returns the newly created `TeamMemberResponse` object (HTTP `201 Created`).
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_id": "usr_ghi789",
+    "email": "carol@acme.io",
+    "display_name": "Carol",
+    "role": "admin",
+    "invitation_status": "active"
+  }'
+```
+
+```json Response
+{
+  "id": "018e2f3b-0003-7d4e-9f0a-bc1234567893",
+  "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "user_id": "usr_ghi789",
+  "email": "carol@acme.io",
+  "display_name": "Carol",
+  "role": "admin",
+  "invitation_status": "active",
+  "created_at": "2024-06-20T12:00:00Z",
+  "last_active_at": null
+}
+```
+</CodeGroup>
+
+---
+
+## Invite a team member
+
+Sends an email invitation to an external user. A pending membership record is created immediately; the user is marked `active` once they accept the invitation.
+
+```
+POST /api/v1/teams/{team_id}/invite
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team the user is being invited to.
+</ParamField>
+
+### Request body
+
+<ParamField body="email" type="string" required>
+  The email address to send the invitation to.
+</ParamField>
+
+<ParamField body="role" type="string" default="member">
+  The role to assign when the invitation is accepted: `owner`, `admin`, `member`, or `viewer`.
+</ParamField>
+
+### Response
+
+Returns an `HTTP 202 Accepted` status with a confirmation message. The invitation email is dispatched asynchronously.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/invite" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "email": "dan@external.io",
+    "role": "viewer"
+  }'
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Invitation sent to dan@external.io",
+  "note": "In a production system, an email would be sent with an invitation link"
+}
+```
+</CodeGroup>
+
+---
+
+## Update a team member
+
+Updates a member's role, display name, or invitation status. Requires the caller to have `admin` or `owner` privileges.
+
+```
+PUT /api/v1/teams/{team_id}/members/{member_id}
+```
+
+<Note>
+  Only **owners** can promote another user to `owner` or change the role of an existing owner. Admins can manage `member` and `viewer` roles only.
+</Note>
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team.
+</ParamField>
+
+<ParamField path="member_id" type="uuid" required>
+  The UUID of the membership record to update.
+</ParamField>
+
+### Request body
+
+All fields are optional. Only the fields you provide will be updated.
+
+<ParamField body="role" type="string">
+  New role to assign: `owner`, `admin`, `member`, or `viewer`.
+</ParamField>
+
+<ParamField body="display_name" type="string">
+  Updated display name for this member.
+</ParamField>
+
+<ParamField body="invitation_status" type="string">
+  Updated invitation status: `active`, `pending`, `expired`, or `inactive`.
+</ParamField>
+
+### Response
+
+Returns the updated `TeamMemberResponse` object.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PUT "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members/018e2f3b-0002-7d4e-9f0a-bc1234567892" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "role": "admin"
+  }'
+```
+
+```json Response
+{
+  "id": "018e2f3b-0002-7d4e-9f0a-bc1234567892",
+  "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "user_id": "usr_def456",
+  "email": "bob@acme.io",
+  "display_name": "Bob",
+  "role": "admin",
+  "invitation_status": "active",
+  "created_at": "2024-03-15T11:00:00Z",
+  "last_active_at": "2024-06-19T17:30:00Z"
+}
+```
+</CodeGroup>
+
+---
+
+## Remove a team member
+
+Permanently removes a member from the team. The member loses access to all integrations and reports scoped to this team.
+
+```
+DELETE /api/v1/teams/{team_id}/members/{member_id}
+```
+
+<Warning>
+  Removing a member immediately revokes their access. This action cannot be undone — you would need to re-add or re-invite the user to restore access.
+</Warning>
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team.
+</ParamField>
+
+<ParamField path="member_id" type="uuid" required>
+  The UUID of the membership record to remove.
+</ParamField>
+
+### Response
+
+Returns a JSON success message on `200 OK`.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members/018e2f3b-0002-7d4e-9f0a-bc1234567892" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Member removed successfully"
+}
+```
+</CodeGroup>
+
+---
+
+## Resend an invitation
+
+Resends the invitation email to a member whose invitation is in `pending` or `expired` status.
+
+```
+POST /api/v1/teams/{team_id}/members/{member_id}/resend-invite
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team.
+</ParamField>
+
+<ParamField path="member_id" type="uuid" required>
+  The UUID of the pending membership record to resend the invitation for.
+</ParamField>
+
+### Response
+
+Returns a JSON confirmation message on `200 OK`. Returns `400 Bad Request` if the member's status is not `pending` or `expired`.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890/members/018e2f3b-0004-7d4e-9f0a-bc1234567894/resend-invite" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Invitation resent to dan@external.io"
+}
+```
+</CodeGroup>

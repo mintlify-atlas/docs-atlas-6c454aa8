@@ -1,0 +1,294 @@
+---
+title: "Cross-Resource Reports API — Team Contribution Reports"
+sidebarTitle: "Cross-Resource Reports"
+description: "REST endpoints to create, list, update, delete, and generate cross-resource reports that aggregate LLM analyses across multiple Slack channels."
+---
+
+A `CrossResourceReport` is the top-level container for a team's analytics run. It groups one or more `ResourceAnalysis` records — each covering one Slack channel — and tracks aggregate statistics (total messages, participants, threads, reactions) across all included channels. Reports move through a lifecycle of `PENDING → IN_PROGRESS → COMPLETED` (or `FAILED`). Generation is handled asynchronously in the background.
+
+<Note>
+  Creating, updating, deleting, and generating reports requires `owner` or `admin` role in the team. Listing and reading reports requires any team membership.
+</Note>
+
+---
+
+## List reports
+
+```http
+GET /api/v1/reports/{team_id}/cross-resource-reports
+```
+
+<ParamField path="team_id" type="uuid" required>
+  UUID of the team whose reports to list.
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by report status. One of: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`.
+</ParamField>
+
+<ParamField query="start_date" type="datetime">
+  Include only reports whose `date_range_start` is on or after this date.
+</ParamField>
+
+<ParamField query="end_date" type="datetime">
+  Include only reports whose `date_range_end` is on or before this date.
+</ParamField>
+
+<ParamField query="resource_type" type="string">
+  Filter to reports that include at least one analysis of this resource type. One of: `SLACK_CHANNEL`, `GITHUB_REPO`, `NOTION_PAGE`.
+</ParamField>
+
+<ParamField query="sort_by" type="string" default="created_at">
+  Field to sort results by (e.g. `created_at`, `date_range_start`, `title`).
+</ParamField>
+
+<ParamField query="sort_order" type="string" default="desc">
+  Sort direction. One of: `asc`, `desc`.
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number (1-based).
+</ParamField>
+
+<ParamField query="page_size" type="integer" default="20">
+  Number of items per page. Must be between `1` and `100`.
+</ParamField>
+
+Returns a `PaginatedResponse[CrossResourceReportResponse]`:
+
+```json
+{
+  "items": [...],
+  "total": 42,
+  "page": 1,
+  "page_size": 20,
+  "pages": 3
+}
+```
+
+<Expandable title="CrossResourceReportResponse schema">
+  <ResponseField name="id" type="uuid">Report UUID.</ResponseField>
+  <ResponseField name="team_id" type="uuid">Owning team UUID.</ResponseField>
+  <ResponseField name="title" type="string">Report title (max 255 chars).</ResponseField>
+  <ResponseField name="description" type="string | null">Optional report description.</ResponseField>
+  <ResponseField name="date_range_start" type="datetime">Start of the analysis date window.</ResponseField>
+  <ResponseField name="date_range_end" type="datetime">End of the analysis date window.</ResponseField>
+  <ResponseField name="status" type="string">One of: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`.</ResponseField>
+  <ResponseField name="report_parameters" type="object | null">Configuration that was used when generating the report (e.g. `include_threads`, `include_reactions`, `analysis_type`).</ResponseField>
+  <ResponseField name="comprehensive_analysis" type="string | null">LLM-generated summary synthesising all channel analyses.</ResponseField>
+  <ResponseField name="model_used" type="string | null">LLM model identifier used for the comprehensive analysis.</ResponseField>
+  <ResponseField name="total_resources" type="integer | null">Total number of resources (channels) included.</ResponseField>
+  <ResponseField name="completed_analyses" type="integer | null">Number of resource analyses that completed successfully.</ResponseField>
+  <ResponseField name="pending_analyses" type="integer | null">Number of resource analyses still waiting to run.</ResponseField>
+  <ResponseField name="failed_analyses" type="integer | null">Number of resource analyses that failed.</ResponseField>
+  <ResponseField name="resource_types" type="string[]">Distinct resource types present in this report's analyses.</ResponseField>
+  <ResponseField name="total_messages" type="integer | null">Aggregate message count across all channel analyses.</ResponseField>
+  <ResponseField name="total_participants" type="integer | null">Aggregate unique participant count.</ResponseField>
+  <ResponseField name="total_threads" type="integer | null">Aggregate thread count.</ResponseField>
+  <ResponseField name="total_reactions" type="integer | null">Aggregate reaction count.</ResponseField>
+  <ResponseField name="created_at" type="datetime">Record creation timestamp.</ResponseField>
+  <ResponseField name="updated_at" type="datetime">Record last-updated timestamp.</ResponseField>
+</Expandable>
+
+---
+
+## Create a report (generic)
+
+Creates a cross-resource report and optionally pre-populates `ResourceAnalysis` entries.
+
+```http
+POST /api/v1/reports/{team_id}/cross-resource-reports
+```
+
+<ParamField path="team_id" type="uuid" required>
+  UUID of the owning team. Requires `owner` or `admin` role.
+</ParamField>
+
+<ParamField body="title" type="string" required>
+  Report title (max 255 characters).
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional report description.
+</ParamField>
+
+<ParamField body="date_range_start" type="datetime" required>
+  Start of the analysis period.
+</ParamField>
+
+<ParamField body="date_range_end" type="datetime" required>
+  End of the analysis period.
+</ParamField>
+
+<ParamField body="report_parameters" type="object">
+  Arbitrary JSON for report-level configuration.
+</ParamField>
+
+<ParamField body="resource_analyses" type="array">
+  Optional list of resource analysis definitions to create immediately. Each entry must include `integration_id`, `resource_id`, `resource_type`, `analysis_type`, `period_start`, and `period_end`.
+</ParamField>
+
+Returns `201 Created` with a `CrossResourceReportResponse`.
+
+---
+
+## Create a channel report (recommended)
+
+A simplified endpoint that creates a report and all associated `ResourceAnalysis` records for a list of Slack channels, then immediately schedules background analysis tasks.
+
+<Tip>
+  This is the recommended way to create reports for Slack channels. It handles resource analysis creation, initial message statistics, and task scheduling in a single request — saving multiple round-trips compared to the generic endpoint.
+</Tip>
+
+```http
+POST /api/v1/reports/{team_id}/channel-reports
+```
+
+<ParamField path="team_id" type="uuid" required>
+  UUID of the team. Requires at minimum `member` role.
+</ParamField>
+
+<ParamField body="channels" type="array" required>
+  List of channel objects to include. Each must have `id` (resource UUID), `integration_id` (UUID), and `name` (display name).
+</ParamField>
+
+<ParamField body="start_date" type="datetime" required>
+  Start of the analysis period. Capped to 180 days before `end_date` if the range exceeds the maximum.
+</ParamField>
+
+<ParamField body="end_date" type="datetime" required>
+  End of the analysis period.
+</ParamField>
+
+<ParamField body="title" type="string">
+  Custom report title. Auto-generated from channel names if omitted.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Custom report description. Auto-generated if omitted.
+</ParamField>
+
+<ParamField body="include_threads" type="boolean" default="true">
+  Whether to include thread replies in the analysis.
+</ParamField>
+
+<ParamField body="include_reactions" type="boolean" default="true">
+  Whether to include reactions data in the analysis.
+</ParamField>
+
+<ParamField body="analysis_type" type="string" default="CONTRIBUTION">
+  Type of analysis. One of: `CONTRIBUTION`, `TOPICS`, `SENTIMENT`, `ACTIVITY`.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.example.com/api/v1/reports/018e1234-abcd-7000-8000-000000000001/channel-reports" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "channels": [
+      {
+        "id": "018e1234-abcd-7000-8000-000000000010",
+        "integration_id": "018e1234-abcd-7000-8000-000000000005",
+        "name": "engineering"
+      },
+      {
+        "id": "018e1234-abcd-7000-8000-000000000011",
+        "integration_id": "018e1234-abcd-7000-8000-000000000005",
+        "name": "product"
+      }
+    ],
+    "start_date": "2024-06-01T00:00:00Z",
+    "end_date": "2024-06-30T23:59:59Z",
+    "title": "June Engineering & Product Review",
+    "include_threads": true,
+    "include_reactions": true,
+    "analysis_type": "CONTRIBUTION"
+  }'
+```
+</CodeGroup>
+
+Returns `201 Created` with a `CrossResourceReportResponse`. The background analysis scheduler is triggered automatically — poll the [report detail endpoint](#get-report-detail) or individual [task-status endpoints](/api/reports/resource-analyses#get-task-status) to monitor progress.
+
+---
+
+## Get report detail
+
+```http
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the report.</ParamField>
+
+<ParamField query="include_analyses" type="boolean" default="false">
+  When `true`, the response includes the full `resource_analyses` array (a list of `ResourceAnalysisResponse`).
+</ParamField>
+
+Returns a `CrossResourceReportDetailResponse` which extends `CrossResourceReportResponse` with:
+
+<ResponseField name="resource_analyses" type="array | null">
+  Full list of `ResourceAnalysisResponse` objects. Only populated when `include_analyses=true`.
+</ResponseField>
+
+The detail response also always includes the aggregated statistics fields (`total_messages`, `total_participants`, `total_threads`, `total_reactions`) calculated from completed child analyses.
+
+---
+
+## Update a report
+
+```http
+PUT /api/v1/reports/{team_id}/cross-resource-reports/{report_id}
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team. Requires `owner` or `admin` role.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the report to update.</ParamField>
+
+<ParamField body="title" type="string">New report title.</ParamField>
+<ParamField body="description" type="string">New description.</ParamField>
+<ParamField body="date_range_start" type="datetime">New analysis period start.</ParamField>
+<ParamField body="date_range_end" type="datetime">New analysis period end.</ParamField>
+<ParamField body="report_parameters" type="object">Updated report parameters.</ParamField>
+
+<Warning>
+  Reports with `status: "COMPLETED"` cannot be updated. Attempting to do so returns `400 Bad Request` with `"Cannot update a completed report"`.
+</Warning>
+
+Returns the updated `CrossResourceReportResponse`.
+
+---
+
+## Delete a report
+
+```http
+DELETE /api/v1/reports/{team_id}/cross-resource-reports/{report_id}
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team. Requires `owner` or `admin` role.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the report to delete.</ParamField>
+
+This is a **soft delete** — the report's `is_active` flag is set to `false` and the record is retained in the database. Returns `{"message": "Report deleted successfully"}`.
+
+---
+
+## Generate a report
+
+Triggers background LLM analysis tasks for all pending or failed `ResourceAnalysis` entries in the report.
+
+```http
+POST /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/generate
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team. Requires `owner` or `admin` role.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the report to generate.</ParamField>
+
+Returns a `ReportGenerationResponse`:
+
+<ResponseField name="report_id" type="uuid">UUID of the report that was triggered.</ResponseField>
+<ResponseField name="status" type="string">Updated report status — will be `IN_PROGRESS`.</ResponseField>
+<ResponseField name="resource_analyses_created" type="integer">Number of new `ResourceAnalysis` records that were created (0 if analyses already existed).</ResponseField>
+<ResponseField name="message" type="string">Human-readable status message including the number of tasks scheduled.</ResponseField>
+
+<Warning>
+  Calling this endpoint on a `COMPLETED` or `IN_PROGRESS` report returns `400 Bad Request`. Use the [task-status endpoint](/api/reports/resource-analyses#get-task-status) to check progress on individual channel analyses.
+</Warning>

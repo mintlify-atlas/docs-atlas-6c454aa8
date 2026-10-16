@@ -1,20 +1,71 @@
 ---
-title: "Introduction"
-description: "Welcome to your project"
+title: "Toban Contribution Viewer: AI-Powered Team Analytics"
+sidebarTitle: "Home"
+description: "Visualize and understand how your team contributes across Slack, GitHub, and Notion using LLM-driven analysis and interactive dashboards."
 ---
 
-Write a short description of your product here. What it does, who it's for, and what they can accomplish with it.
+Toban Contribution Viewer is an AI-powered analytics platform that connects to your team's digital workspaces, collects activity data from Slack (and optionally GitHub and Notion), and surfaces actionable contribution insights through LLM analysis and a React dashboard. It helps teams recognize hidden contributors, understand communication patterns, and make data-driven decisions.
 
-<Tip>
-  Ready to make this your own? Start by editing this page. Update your `docs.json` file to customize your site. Then fill out the [Quickstart](/quickstart) page.
-</Tip>
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get your backend and frontend running in under 10 minutes using Docker Compose.
+  </Card>
+  <Card title="Slack Integration" icon="slack" href="/guides/slack-integration">
+    Connect a Slack workspace via OAuth and start syncing channel data.
+  </Card>
+  <Card title="Channel Analysis" icon="chart-bar" href="/guides/channel-analysis">
+    Run LLM-powered analysis on Slack channels to surface contributor insights.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the full REST API — teams, integrations, Slack, and reports.
+  </Card>
+</CardGroup>
 
-<Card title="Quickstart" icon="rocket" href="/quickstart">
-  This card links to the quickstart page in your project.
-</Card>
-<Card title="Components" icon="puzzle-piece" href="https://mintlify.com/docs/components">
-  Add cards, callouts, steps, tabs, and more to design and structure your pages.
-</Card>
-<Card title="Settings" icon="gear" href="https://mintlify.com/docs/organize/settings">
-  Set your site name, branding, and navigation in the `docs.json` file.
-</Card>
+## What Toban Does
+
+Toban connects to your team's Slack workspace through OAuth, periodically syncs messages and reactions into a PostgreSQL database, and then uses OpenRouter (supporting Claude, GPT-4, and other LLMs) to analyze those messages and generate structured insights: topic summaries, key contributor profiles, discussion highlights, and cross-channel reports.
+
+<CardGroup cols={3}>
+  <Card title="Data Collection" icon="database">
+    Secure OAuth connections to Slack. Configurable date ranges, channel selection, and background message sync.
+  </Card>
+  <Card title="AI Analysis" icon="brain">
+    OpenRouter-powered analysis classifies contributions by type — problem-solving, knowledge sharing, coordination — and extracts trends.
+  </Card>
+  <Card title="Reporting" icon="file-chart-column">
+    Cross-resource reports aggregate analysis across multiple channels, with per-team access control and exportable results.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Set up your team">
+    Sign in with Supabase Auth and create a team. Invite members and assign roles (owner, admin, or member).
+  </Step>
+  <Step title="Connect Slack">
+    Add a Slack integration by completing the OAuth flow — enter your Slack app credentials in the UI, then authorize workspace access.
+  </Step>
+  <Step title="Select channels and sync">
+    Choose which channels to analyze. Toban syncs messages and thread replies into its database on demand or on a schedule.
+  </Step>
+  <Step title="Run analysis">
+    Trigger an LLM analysis on any synced channel. Toban returns topic breakdowns, contributor insights, and key highlights powered by your chosen model.
+  </Step>
+  <Step title="Generate reports">
+    Combine multiple channel analyses into a cross-resource report for a holistic view of team contribution across your workspace.
+  </Step>
+</Steps>
+
+## Key Features
+
+- **Slack OAuth** — zero-config workspace connection; credentials entered in the UI, not environment variables
+- **Background sync** — channel and message sync runs in FastAPI background tasks to avoid timeouts
+- **LLM flexibility** — switch between Claude, GPT-4, and other OpenRouter models per analysis
+- **Role-based access** — owner, admin, and member roles control who can create integrations and generate reports
+- **Cross-resource reports** — aggregate insights across multiple Slack channels in a single report
+- **Supabase authentication** — JWT-based auth with email, GitHub, and Google sign-in support
+
+<Note>
+Toban is designed to be self-hosted. You bring your own Supabase project, PostgreSQL database, OpenRouter API key, and Slack app credentials. See the [Self-Hosting guide](/self-hosting) to get started.
+</Note>

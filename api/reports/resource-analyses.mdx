@@ -1,0 +1,203 @@
+---
+title: "Resource Analyses API — Individual Channel Analysis Records"
+sidebarTitle: "Resource Analyses"
+description: "REST endpoints to list and retrieve individual ResourceAnalysis records within a cross-resource report, including task status polling."
+---
+
+A `ResourceAnalysis` is the atomic unit of insight in Toban: the result of analyzing one resource (e.g. a single Slack channel) within the context of a `CrossResourceReport`. Each record tracks its own status lifecycle, aggregated message statistics, and the LLM-generated text fields (summary, topic analysis, contributor insights, key highlights). Once all analyses within a report are complete, the parent report transitions to `COMPLETED`.
+
+---
+
+## Reference tables
+
+### ReportStatus values
+
+| Value | Description |
+|---|---|
+| `PENDING` | Analysis has been queued but has not started yet. |
+| `IN_PROGRESS` | Analysis task is currently running. |
+| `COMPLETED` | Analysis finished successfully and results are available. |
+| `FAILED` | Analysis encountered an error; the `results` field may contain error details. |
+
+### AnalysisResourceType values
+
+| Value | Description |
+|---|---|
+| `SLACK_CHANNEL` | A Slack channel from a connected workspace. |
+| `GITHUB_REPO` | A GitHub repository (future). |
+| `NOTION_PAGE` | A Notion page (future). |
+
+### AnalysisType values
+
+| Value | Description |
+|---|---|
+| `CONTRIBUTION` | Who contributed what — key contributors, activity patterns. |
+| `TOPICS` | What was discussed — main discussion topics and themes. |
+| `SENTIMENT` | Tone and sentiment trends across the channel. |
+| `ACTIVITY` | Volume and timing patterns of messages and participation. |
+
+---
+
+## List resource analyses
+
+Returns all `ResourceAnalysis` records for a specific report, with optional filtering and pagination.
+
+```http
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the parent report.</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by analysis status. One of: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`.
+</ParamField>
+
+<ParamField query="resource_type" type="string">
+  Filter by resource type. One of: `SLACK_CHANNEL`, `GITHUB_REPO`, `NOTION_PAGE`.
+</ParamField>
+
+<ParamField query="analysis_type" type="string">
+  Filter by analysis type. One of: `CONTRIBUTION`, `TOPICS`, `SENTIMENT`, `ACTIVITY`.
+</ParamField>
+
+<ParamField query="page" type="integer" default="1">
+  Page number (1-based).
+</ParamField>
+
+<ParamField query="page_size" type="integer" default="20">
+  Number of items per page. Must be between `1` and `100`.
+</ParamField>
+
+Returns a list of `ResourceAnalysisResponse` objects.
+
+<Expandable title="ResourceAnalysisResponse schema">
+  <ResponseField name="id" type="uuid">Unique identifier for this analysis record.</ResponseField>
+  <ResponseField name="cross_resource_report_id" type="uuid">UUID of the parent `CrossResourceReport`.</ResponseField>
+  <ResponseField name="integration_id" type="uuid">UUID of the integration that owns the analyzed resource.</ResponseField>
+  <ResponseField name="resource_id" type="uuid">UUID of the resource (channel) that was analyzed.</ResponseField>
+  <ResponseField name="resource_type" type="string">Type of resource analyzed — see [AnalysisResourceType](#analysisresourcetype-values).</ResponseField>
+  <ResponseField name="analysis_type" type="string">Type of analysis performed — see [AnalysisType](#analysistype-values).</ResponseField>
+  <ResponseField name="status" type="string">Current analysis status — see [ReportStatus](#reportstatus-values).</ResponseField>
+  <ResponseField name="period_start" type="datetime">Start of the analysis time window.</ResponseField>
+  <ResponseField name="period_end" type="datetime">End of the analysis time window.</ResponseField>
+  <ResponseField name="analysis_parameters" type="object | null">Parameters used (e.g. `include_threads`, `include_reactions`, `channel_name`).</ResponseField>
+  <ResponseField name="message_count" type="integer | null">Number of messages included in the analysis.</ResponseField>
+  <ResponseField name="participant_count" type="integer | null">Number of unique participants.</ResponseField>
+  <ResponseField name="thread_count" type="integer | null">Number of thread parent messages.</ResponseField>
+  <ResponseField name="reaction_count" type="integer | null">Total reaction count.</ResponseField>
+  <ResponseField name="resource_summary" type="string | null">LLM-generated prose summary of the channel and its activity during the period.</ResponseField>
+  <ResponseField name="topic_analysis" type="string | null">LLM-generated description of main discussion topics.</ResponseField>
+  <ResponseField name="contributor_insights" type="string | null">LLM-generated breakdown of key contributors and communication patterns.</ResponseField>
+  <ResponseField name="key_highlights" type="string | null">LLM-generated list of notable discussions or decisions.</ResponseField>
+  <ResponseField name="model_used" type="string | null">Identifier of the LLM model that generated the analysis text.</ResponseField>
+  <ResponseField name="analysis_generated_at" type="datetime | null">UTC timestamp when the LLM analysis was completed.</ResponseField>
+  <ResponseField name="workspace_uuid" type="uuid | null">UUID of the associated `SlackWorkspace` record (populated when available).</ResponseField>
+  <ResponseField name="results" type="object | null">Raw results JSON, including message statistics and any additional computed data.</ResponseField>
+  <ResponseField name="created_at" type="datetime">Record creation timestamp.</ResponseField>
+  <ResponseField name="updated_at" type="datetime">Record last-updated timestamp.</ResponseField>
+</Expandable>
+
+---
+
+## Get a single resource analysis
+
+```http
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses/{analysis_id}
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the parent report.</ParamField>
+<ParamField path="analysis_id" type="uuid" required>UUID of the resource analysis to retrieve.</ParamField>
+
+Returns a single `ResourceAnalysisResponse` or `404 Not Found` if the analysis does not exist or does not belong to the specified report.
+
+---
+
+## Get task status
+
+Returns the current execution state of the background analysis task for a specific `ResourceAnalysis`.
+
+```http
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses/{analysis_id}/task-status
+```
+
+<ParamField path="team_id" type="uuid" required>UUID of the owning team.</ParamField>
+<ParamField path="report_id" type="uuid" required>UUID of the parent report.</ParamField>
+<ParamField path="analysis_id" type="uuid" required>UUID of the resource analysis.</ParamField>
+
+Returns:
+
+<ResponseField name="analysis_id" type="string">UUID of the queried analysis.</ResponseField>
+<ResponseField name="database_status" type="string">The persisted status from the database — one of the [ReportStatus](#reportstatus-values) values.</ResponseField>
+<ResponseField name="task_status" type="string">The in-memory task scheduler state (e.g. `RUNNING`, `PENDING`, `NOT_FOUND`).</ResponseField>
+<ResponseField name="is_running" type="boolean">`true` if `task_status == "RUNNING"`.</ResponseField>
+<ResponseField name="last_updated" type="string | null">ISO 8601 timestamp from the analysis record's `updated_at` field.</ResponseField>
+
+<Note>
+  Poll this endpoint to track whether an asynchronous analysis task is still running. A recommended polling interval is every 5–10 seconds. The analysis is done when `database_status` transitions to `COMPLETED` or `FAILED` **and** `is_running` is `false`. Once `COMPLETED`, the full results are available via the [get single analysis](#get-a-single-resource-analysis) endpoint.
+</Note>
+
+<CodeGroup>
+```bash cURL — poll task status
+curl -X GET \
+  "https://api.example.com/api/v1/reports/018e1234-abcd-7000-8000-000000000001/cross-resource-reports/018e1234-abcd-7000-8000-000000000020/resource-analyses/018e1234-abcd-7000-8000-000000000030/task-status" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Example response (running)
+{
+  "analysis_id": "018e1234-abcd-7000-8000-000000000030",
+  "database_status": "IN_PROGRESS",
+  "task_status": "RUNNING",
+  "is_running": true,
+  "last_updated": "2024-06-15T14:32:11.000000"
+}
+```
+
+```json Example response (complete)
+{
+  "analysis_id": "018e1234-abcd-7000-8000-000000000030",
+  "database_status": "COMPLETED",
+  "task_status": "NOT_FOUND",
+  "is_running": false,
+  "last_updated": "2024-06-15T14:34:52.000000"
+}
+```
+</CodeGroup>
+
+---
+
+## Get workspace for an analysis
+
+Resolves the Slack workspace that contains the resource behind a given analysis. Useful for constructing deep links back into Slack or for grouping analyses by workspace in the UI.
+
+```http
+GET /api/v1/reports/resource-analyses/{analysis_id}/workspace
+```
+
+<ParamField path="analysis_id" type="uuid" required>
+  UUID of the `ResourceAnalysis` record. The caller must have access to the team that owns the parent report.
+</ParamField>
+
+<ResponseField name="workspace_id" type="uuid">The `SlackWorkspace` UUID (internal database identifier).</ResponseField>
+<ResponseField name="slack_workspace_id" type="string">The Slack-native workspace ID string (e.g. `T01234ABCD`).</ResponseField>
+<ResponseField name="workspace_name" type="string | null">Display name of the Slack workspace.</ResponseField>
+<ResponseField name="integration_id" type="uuid">UUID of the integration that connects this workspace.</ResponseField>
+
+<CodeGroup>
+```bash cURL
+curl -X GET \
+  "https://api.example.com/api/v1/reports/resource-analyses/018e1234-abcd-7000-8000-000000000030/workspace" \
+  -H "Authorization: Bearer <token>"
+```
+
+```json Example response
+{
+  "workspace_id": "018e1234-abcd-7000-8000-000000000040",
+  "slack_workspace_id": "T01234ABCD",
+  "workspace_name": "Acme Corp Engineering",
+  "integration_id": "018e1234-abcd-7000-8000-000000000005"
+}
+```
+</CodeGroup>

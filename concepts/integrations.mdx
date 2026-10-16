@@ -1,0 +1,124 @@
+---
+title: "Integrations: Connecting Services to Your Team"
+sidebarTitle: "Integrations"
+description: "Integrations link external services like Slack to a Toban team. Each integration stores credentials, exposes resources, and can be shared across teams."
+---
+
+An integration is a persistent, credentialed connection between a Toban team and an external service — today primarily Slack, with GitHub and Notion support also modeled. When a team connects a Slack workspace via OAuth, Toban creates an `Integration` record that owns the encrypted access tokens, discovers the available channels and users as `ServiceResource` records, and keeps the connection alive through token refresh. All contribution analysis flows through the integration layer: you can't run a report on a Slack channel unless your team has an active integration that covers that workspace.
+
+## Integration model
+
+The `Integration` model is the central entity for any external service connection. Its key fields are:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier for the integration |
+| `name` | string | User-chosen display name (e.g., "Engineering Slack") |
+| `description` | text | Optional description of the integration's purpose |
+| `service_type` | `IntegrationType` | The external service being connected (see below) |
+| `status` | `IntegrationStatus` | Current connection state (see lifecycle section) |
+| `owner_team_id` | UUID | The team that owns and administers this integration |
+| `workspace_id` | string | The workspace identifier in the external service (e.g., Slack's `T…` team ID) |
+| `integration_metadata` | JSONB | Service-specific configuration — workspace name, bot user ID, installed channel list, OAuth scopes, etc. |
+| `created_by_user_id` | string | The user who set up the integration |
+| `last_used_at` | datetime | When the integration was last accessed by an analysis or sync |
+
+### Service types
+
+The `IntegrationType` enum defines the supported (and planned) external services:
+
+| Value | Service | Status |
+|---|---|---|
+| `slack` | Slack workspace via OAuth | **Supported** |
+| `github` | GitHub organization or user account | Modeled |
+| `notion` | Notion workspace via OAuth | Modeled |
+| `discord` | Discord server | Future support |
+
+The Slack integration is the only service currently wired to the full analysis pipeline. GitHub and Notion integration types are defined in the schema and credential flow but do not yet have analysis services attached.
+
+## Credentials
+
+OAuth tokens and API keys are stored separately from the main `Integration` record in `IntegrationCredential`. This separation means credentials can be rotated independently and the integration record can be returned in API responses without exposing sensitive values.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier |
+| `integration_id` | UUID | Foreign key to the parent `Integration` |
+| `credential_type` | `CredentialType` | One of `oauth_token`, `personal_token`, `api_key`, `app_token` |
+| `encrypted_value` | string | The actual token or secret, stored encrypted at rest |
+| `refresh_token` | string | Encrypted refresh token when the OAuth flow provides one |
+| `scopes` | JSONB | Array of permission scopes granted at authorization time |
+| `expires_at` | datetime | Expiry time for the credential; `null` for non-expiring tokens |
+
+<Note>
+  `IntegrationCredential` records are **never** included in standard API responses. The `CredentialResponse` schema returned by the API exposes only non-sensitive fields: `id`, `credential_type`, `scopes`, and `expires_at`. The `encrypted_value` and `refresh_token` fields are accessible only within backend service code.
+</Note>
+
+A background process monitors `expires_at` values and uses the `refresh_token` to obtain fresh credentials before expiry. If a refresh fails, the integration transitions to the `expired` status and the owner team is notified.
+
+## Resources
+
+Once an integration is established, Toban discovers and records the available objects within the external service as `ServiceResource` entries. For Slack, this means channels and users. Each resource record links back to its parent integration:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier for the resource |
+| `integration_id` | UUID | Foreign key to the parent `Integration` |
+| `resource_type` | `ResourceType` | Category of resource (see below) |
+| `external_id` | string | The resource's ID within the external service (e.g., Slack channel ID `C…`) |
+| `name` | string | Human-readable name (e.g., `#engineering`) |
+| `resource_metadata` | JSONB | Additional properties fetched from the service |
+| `last_synced_at` | datetime | When this resource was last refreshed from the external API |
+
+<CardGroup cols={2}>
+  <Card title="Slack Channels" icon="hash">
+    Represented by `ResourceType.SLACK_CHANNEL`. Stores the channel's Slack ID, name, type (`public`, `private`, `im`, `mpim`), purpose, topic, member count, bot membership status, and sync range timestamps. Channels can be individually selected for analysis via the `is_selected_for_analysis` flag on the `SlackChannel` model.
+  </Card>
+  <Card title="Slack Users" icon="user">
+    Represented by `ResourceType.SLACK_USER`. Stores the user's Slack ID, display name, real name, email, timezone, and profile image URL. Bot accounts and deleted users are flagged with `is_bot` and `is_deleted` respectively, and are excluded from contribution metrics.
+  </Card>
+</CardGroup>
+
+The `ResourceType` enum also includes values for GitHub (`GITHUB_REPOSITORY`, `GITHUB_ISSUE`, `GITHUB_PR`, `GITHUB_WEBHOOK`) and Notion (`NOTION_PAGE`, `NOTION_DATABASE`, `NOTION_BLOCK`) in anticipation of future support.
+
+The combination of `(integration_id, resource_type, external_id)` is enforced as unique, so the same Slack channel is never recorded twice for a given integration.
+
+## Integration sharing
+
+An integration can be shared with teams other than its owner. The `IntegrationShare` model records each sharing relationship, and the `ShareLevel` enum controls what the receiving team can do:
+
+| Share level | What the receiving team can do |
+|---|---|
+| `full_access` | Use all integration functionality, including triggering syncs and running analyses |
+| `limited_access` | Use a subset of functionality defined by the owner team |
+| `read_only` | View resources and existing reports; cannot trigger new syncs or analyses |
+
+Sharing is controlled at both the integration level (via `IntegrationShare`) and the resource level (via `ResourceAccess`, which assigns `read`, `write`, or `admin` access on individual resources to specific teams).
+
+Only team admins and owners can create or revoke shares. Every share event is recorded as an `IntegrationEvent` for audit purposes, with the `actor_user_id` and `affected_team_id` captured alongside the event type (`shared`, `unshared`, `access_changed`, etc.).
+
+## Integration lifecycle
+
+An integration moves through the following statuses over its lifetime:
+
+<Steps>
+  <Step title="Active">
+    The integration is fully connected. Credentials are valid, syncs succeed, and analyses can be triggered. This is the default state after a successful OAuth flow.
+  </Step>
+  <Step title="Disconnected">
+    The owner team has manually revoked the connection. Existing data (synced messages, past reports) is preserved, but no new syncs will run. The integration can be reconnected by re-running the OAuth flow.
+  </Step>
+  <Step title="Expired">
+    The OAuth access token has expired and the automatic refresh failed. The owner team must re-authenticate to restore the connection. Toban sets this status and notifies the owner team.
+  </Step>
+  <Step title="Revoked">
+    The external service revoked the token (e.g., a Slack admin uninstalled the app). This is similar to `expired` but indicates an external action rather than a credential timeout.
+  </Step>
+  <Step title="Error">
+    An unexpected error occurred during a sync or credential operation. Details are logged in `IntegrationEvent` records with `event_type = error`. Investigate and reconnect to resolve.
+  </Step>
+</Steps>
+
+<Warning>
+  When an integration transitions out of `active`, all teams that share it lose the ability to trigger new syncs and analyses. Existing `ResourceAnalysis` records and synced messages are not deleted — only live operations are blocked.
+</Warning>

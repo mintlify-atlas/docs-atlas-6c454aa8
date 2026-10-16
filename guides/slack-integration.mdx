@@ -1,0 +1,231 @@
+---
+title: "Connect a Slack Workspace to Toban"
+sidebarTitle: "Slack Integration"
+description: "Set up a Slack app, configure OAuth scopes, and connect your workspace to Toban using the OAuth 2.0 flow. Covers ngrok setup for local development."
+---
+
+Toban connects to Slack via OAuth 2.0, giving it read access to your workspace's messages, channels, and user profiles — the raw material it needs to generate contribution insights. You'll create a Slack app, configure the required scopes, then authorize it from within the Toban UI. No Slack credentials need to go into environment variables; users enter their client ID and secret directly in the app.
+
+## Create a Slack App
+
+The fastest way to get started is to create a new app from the pre-built manifest below. This sets all scopes, redirect URLs, and bot settings in one step.
+
+<Steps>
+  <Step title="Open the Slack App Directory">
+    Go to [api.slack.com/apps](https://api.slack.com/apps) and sign in. Click **Create New App**, then choose **From an app manifest**.
+  </Step>
+  <Step title="Select a workspace">
+    Pick the workspace you want to use for development or testing, then click **Next**.
+  </Step>
+  <Step title="Paste the App Manifest">
+    Switch to the **YAML** tab and paste the manifest below. Replace the placeholder URLs with your real domain (or ngrok URL for local development), then click **Next** → **Create**.
+
+    ```yaml
+    display_information:
+      name: Toban Contribution Viewer
+      description: Track and analyze team contributions across Slack
+      background_color: "#4A154B"
+
+    features:
+      bot_user:
+        display_name: Toban
+        always_online: false
+
+    oauth_config:
+      redirect_urls:
+        - https://your-app-domain.com/auth/slack/callback
+        - http://localhost:5173/auth/slack/callback
+        - https://your-ngrok-app-url.ngrok-free.app/auth/slack/callback
+      scopes:
+        bot:
+          - channels:history
+          - channels:read
+          - groups:history
+          - groups:read
+          - im:history
+          - mpim:history
+          - reactions:read
+          - users:read
+          - users.profile:read
+          - team:read
+          - files:read
+
+    settings:
+      org_deploy_enabled: false
+      socket_mode_enabled: false
+      token_rotation_enabled: false
+    ```
+  </Step>
+  <Step title="Note your credentials">
+    After creation, navigate to **Basic Information** to find your **Client ID**, **Client Secret**, and **Signing Secret**. You will enter these in the Toban UI — not in any environment file.
+  </Step>
+</Steps>
+
+Alternatively, you can create the app **From scratch** under **OAuth & Permissions** and add scopes manually using the list in the next section.
+
+## Required OAuth Scopes
+
+The following bot token scopes must be present in **OAuth & Permissions → Scopes → Bot Token Scopes**:
+
+| Scope | Purpose |
+|---|---|
+| `channels:history` | Read messages and threads in public channels |
+| `channels:read` | View names and metadata for public channels |
+| `groups:history` | Read messages and threads in private channels the bot has been added to |
+| `groups:read` | View basic info about private channels |
+| `reactions:read` | Read emoji reactions — used to measure engagement signals |
+| `users:read` | Access basic profile information for workspace members |
+| `users.profile:read` | Access extended profile fields like display names |
+| `team:read` | Retrieve workspace name, domain, and icon |
+| `im:history` | Access direct messages (optional — for 1-on-1 contribution tracking) |
+| `mpim:history` | Access group direct messages |
+| `files:read` | Access files shared in channels (optional — for document contribution tracking) |
+
+<Note>
+  The `search:read` scope cannot be requested through the OAuth & Permissions page. Toban instead uses the history scopes listed above to collect and index messages for internal searching.
+</Note>
+
+## Configure Redirect URLs
+
+Slack performs an exact-match check on the redirect URI included in the OAuth request. You must add every URL where users might complete the OAuth flow.
+
+Navigate to **OAuth & Permissions → Redirect URLs** in your app settings and add:
+
+```text
+https://your-app-domain.com/auth/slack/callback
+http://localhost:5173/auth/slack/callback
+```
+
+If you are using ngrok for local development, also add your ngrok URL in the format:
+
+```text
+https://xyz-123-abc.ngrok-free.app/auth/slack/callback
+```
+
+<Warning>
+  The redirect URL must point to the **frontend** callback route (`/auth/slack/callback`), not the backend API endpoint. Slack redirects the browser, so the URL must be publicly reachable by the user's browser.
+</Warning>
+
+## Connect from the Toban UI
+
+Toban is designed for multi-tenant use — each team uses its own Slack app credentials rather than a shared set of environment variables.
+
+<Steps>
+  <Step title="Sign in to Toban">
+    Navigate to your Toban instance and sign in with your Supabase account.
+  </Step>
+  <Step title="Open the Slack connection page">
+    Go to **Dashboard → Integrations** and click **Connect Slack Workspace** (or navigate directly to `/dashboard/slack/connect`).
+  </Step>
+  <Step title="Enter your Slack app credentials">
+    Paste your **Client ID** and **Client Secret** from the Slack app's **Basic Information** page. These are sent securely to the backend during the OAuth flow and never stored in plain text in your environment.
+  </Step>
+  <Step title="Authorize in Slack">
+    Click **Connect to Slack**. You will be redirected to Slack's authorization page. Review the requested permissions and click **Allow**.
+  </Step>
+  <Step title="Confirm the connection">
+    After authorizing, Slack redirects back to Toban. You should see a success message confirming the workspace name. In the background, Toban fetches workspace metadata (icon, team size, user list) asynchronously so the OAuth flow stays fast.
+  </Step>
+</Steps>
+
+## ngrok for Local Development
+
+Slack requires HTTPS for all non-localhost OAuth redirect URLs. ngrok creates an HTTPS tunnel to your local machine so you can test the full OAuth flow without deploying.
+
+<Warning>
+  Free ngrok accounts generate a new random URL every time ngrok restarts. You must update both your Slack app's **Redirect URLs** and the `NGROK_URL` variable in `.env.docker` each time this happens. Consider upgrading to a paid ngrok account with a reserved domain for persistent local development.
+</Warning>
+
+<Steps>
+  <Step title="Install ngrok">
+    ```bash
+    npm install -g ngrok
+    ```
+  </Step>
+  <Step title="Start the Docker containers">
+    ```bash
+    docker compose up -d
+    ```
+  </Step>
+  <Step title="Start ngrok">
+    Use the provided helper script to start the tunnel with your auth token:
+
+    ```bash
+    # Make the script executable (first time only)
+    chmod +x ./scripts/start-ngrok.sh
+
+    # Run with your ngrok authtoken
+    ./scripts/start-ngrok.sh your_ngrok_authtoken
+    ```
+
+    Or create a `.env.ngrok` file and run without arguments:
+
+    ```bash
+    echo "NGROK_AUTHTOKEN=your_ngrok_authtoken" > .env.ngrok
+    # Optional: if you have a custom domain on a paid plan
+    echo "NGROK_CUSTOM_DOMAIN=your-custom-domain.ngrok-free.app" >> .env.ngrok
+    ./scripts/start-ngrok.sh
+    ```
+
+    The script will print a line like:
+
+    ```
+    Tunnel Status  app  online  https://xyz-123-abc.ngrok-free.app -> http://localhost:5173
+    ```
+
+    Copy the `https://` URL — you will need it in the next two steps.
+  </Step>
+  <Step title="Update Slack app redirect URLs">
+    1. Go to [api.slack.com/apps](https://api.slack.com/apps) and open your app.
+    2. Navigate to **OAuth & Permissions → Redirect URLs**.
+    3. Add your ngrok URL with the callback path:
+       ```
+       https://xyz-123-abc.ngrok-free.app/auth/slack/callback
+       ```
+    4. Click **Save URLs**.
+  </Step>
+  <Step title="Update .env.docker">
+    Create or edit `.env.docker` in the project root:
+
+    ```bash
+    # ngrok URL (from the output of the ngrok command above)
+    NGROK_URL=https://xyz-123-abc.ngrok-free.app
+    NGROK_AUTHTOKEN=your_ngrok_auth_token
+
+    # OpenRouter for LLM analytics
+    OPENROUTER_API_KEY=your_openrouter_api_key
+    OPENROUTER_DEFAULT_MODEL=anthropic/claude-3-opus:20240229
+    ```
+
+    <Note>
+      Slack credentials (`SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`) are entered in the UI and are **not** required here.
+    </Note>
+  </Step>
+  <Step title="Restart the containers">
+    ```bash
+    docker compose restart
+    ```
+  </Step>
+  <Step title="Test the OAuth flow">
+    Open the Toban frontend at your ngrok URL (e.g., `https://xyz-123-abc.ngrok-free.app`), navigate to the Slack connection page, and click **Connect to Slack**.
+  </Step>
+</Steps>
+
+## OAuth Flow Details
+
+Understanding what happens server-side during the callback can help you troubleshoot issues.
+
+When a user completes the Slack authorization, Slack redirects the browser to `/auth/slack/callback` on the frontend. The frontend then calls `GET /api/v1/slack/oauth-callback` on the backend with the temporary `code` and the user's `client_id` and `client_secret`. The backend:
+
+1. **Exchanges the code for a token** — posts to `https://slack.com/api/oauth.v2.access` with the client credentials and the same redirect URI used in the original request.
+2. **Creates or updates the workspace record** — if a `SlackWorkspace` row already exists for the returned `team.id`, it updates the access token and marks the workspace as active. Otherwise it creates a new row.
+3. **Schedules a background metadata fetch** — after committing the workspace, Toban enqueues a background task to pull icon URL, team size, and user list from the Slack API. This keeps the OAuth response fast.
+4. **Returns workspace details** — the response includes `workspace_id`, `workspace_name`, `workspace_domain`, `bot_user_id`, and the granted `scope` string so the frontend can immediately create an integration record.
+
+Common OAuth errors and their causes:
+
+| Error | Likely cause |
+|---|---|
+| `redirect_uri did not match` | The ngrok URL changed or was not added to Slack app Redirect URLs |
+| `URL is not HTTPS` | Using an HTTP ngrok URL — always use the `https://` form |
+| `invalid_code` | The authorization code expired or was already used — retry the flow |

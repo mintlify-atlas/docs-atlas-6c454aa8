@@ -1,0 +1,150 @@
+---
+title: "REST API Reference — Toban Contribution Viewer"
+sidebarTitle: "Overview"
+description: "Toban exposes a versioned REST API at /api/v1. All endpoints return JSON and require a Supabase JWT Bearer token except health check."
+---
+
+Toban Contribution Viewer exposes a versioned REST API rooted at `/api/v1`. Every endpoint returns JSON, and the API is organized into four functional groups — Teams, Slack, Integrations, and Reports — each mapped to its own URL prefix. All protected routes require a Supabase-issued JWT sent as an `Authorization: Bearer` header; unauthenticated calls are rejected with `401 Unauthorized`.
+
+## Base URLs
+
+The API is served from the same process as the FastAPI application. Use the appropriate base URL for your environment:
+
+| Environment | Base URL |
+|---|---|
+| Local development | `http://localhost:8000` |
+| Production (Elastic Beanstalk) | `https://<your-eb-env>.elasticbeanstalk.com` |
+
+All API routes are prefixed with `/api/v1`, for example:
+
+```bash
+GET http://localhost:8000/api/v1/teams/
+```
+
+<Note>
+  The interactive Swagger UI at `/docs`, the ReDoc interface at `/redoc`, and the raw OpenAPI schema at `/openapi.json` are **only available when `DEBUG=true`**. These endpoints are disabled in production to avoid leaking schema information.
+</Note>
+
+## Authentication
+
+Every endpoint under `/api/v1` except `GET /` and `GET /health` requires a valid Supabase JWT. Pass it in the HTTP `Authorization` header:
+
+```
+Authorization: Bearer <your-supabase-access-token>
+```
+
+The backend validates the token signature using `SUPABASE_JWT_SECRET` and extracts the caller's user ID from the `sub` claim. See [Authentication](/api/authentication) for the full validation flow, error responses, and code examples.
+
+## API Groups
+
+<CardGroup cols={2}>
+  <Card title="Teams" icon="users" href="/api/teams/teams">
+    Manage teams, members, roles, and invitations. Every resource in the API belongs to a team.
+    Prefix: `/api/v1/teams`
+  </Card>
+  <Card title="Slack" icon="slack" href="/api/slack/oauth">
+    Connect Slack workspaces via OAuth, list channels, fetch messages, and trigger AI-powered contribution analysis.
+    Prefix: `/api/v1/slack`
+  </Card>
+  <Card title="Integrations" icon="plug" href="/api/integrations/integrations">
+    Manage third-party integration credentials and connection status for Slack, GitHub, and Notion.
+    Prefix: `/api/v1/integrations`
+  </Card>
+  <Card title="Reports" icon="chart-bar" href="/api/reports/cross-resource-reports">
+    Generate and retrieve AI-powered contribution reports across team members and time ranges.
+    Prefix: `/api/v1/reports`
+  </Card>
+</CardGroup>
+
+## Common Response Patterns
+
+All responses use standard HTTP status codes and return a JSON body. The table below summarises the shapes you will encounter across every API group.
+
+**200 Success**
+
+A successful response returns the requested resource or an operation result directly. Collections are returned as JSON arrays.
+
+```json
+{
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "name": "Engineering",
+  "slug": "engineering",
+  "created_at": "2024-01-15T09:00:00Z"
+}
+```
+
+**404 Not Found**
+
+Returned when a requested resource does not exist or the authenticated user does not have visibility of it.
+
+```json
+{
+  "detail": "Not found"
+}
+```
+
+**403 Forbidden**
+
+Returned when the authenticated user lacks the required team role to perform the action.
+
+```json
+{
+  "detail": "Insufficient permissions for this action"
+}
+```
+
+**400 Bad Request**
+
+Returned when the request body fails schema validation. The `detail` array contains one entry per invalid field.
+
+```json
+{
+  "detail": [
+    {
+      "loc": ["body", "name"],
+      "msg": "field required",
+      "type": "value_error.missing"
+    }
+  ]
+}
+```
+
+## CORS
+
+The backend ships with a pre-configured list of allowed origins suitable for local development:
+
+- `http://localhost:5173` — Vite dev server (frontend)
+- `http://localhost:8000` — FastAPI server itself
+- `http://127.0.0.1:5173`
+- `http://127.0.0.1:8000`
+
+You can extend this list at runtime without modifying the defaults by setting one of the following environment variables before starting the server:
+
+| Variable | Format | Purpose |
+|---|---|---|
+| `ADDITIONAL_CORS_ORIGINS` | Comma-separated URLs | Add one or more arbitrary origins (e.g. a staging domain) |
+| `NGROK_URL` | Single URL | Automatically appended when tunnelling with ngrok |
+
+The allowed methods are `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`, and `PATCH`. The allowed headers are `Authorization`, `Content-Type`, `X-Requested-With`, and `Accept`. Credentialed requests (`allow_credentials=true`) are supported on all allowed origins.
+
+## Health Check
+
+Two lightweight endpoints are available without authentication and are suitable for load-balancer health probes:
+
+**`GET /health`** — returns HTTP 200 when the application process is running:
+
+```json
+{
+  "status": "ok"
+}
+```
+
+**`GET /`** — root welcome endpoint:
+
+```json
+{
+  "message": "Welcome to Toban Contribution Viewer API"
+}
+```
+
+Neither endpoint validates a JWT or touches the database, making them safe to poll frequently.

@@ -1,0 +1,219 @@
+---
+title: "Generate Cross-Channel Reports for Your Team"
+sidebarTitle: "Cross-Resource Reports"
+description: "Combine analysis from multiple Slack channels into a single cross-resource report, track generation status, and retrieve aggregated contribution metrics."
+---
+
+A cross-resource report gives your team a unified view of contribution patterns across multiple Slack channels — or eventually across multiple platforms — in a single document. Instead of viewing each channel analysis in isolation, you get aggregated metrics, a comprehensive LLM narrative that synthesizes insights across all channels, and the ability to drill down into any individual channel result. This guide walks through creating, generating, and retrieving cross-resource reports via the API.
+
+## What Is a Cross-Resource Report?
+
+A `CrossResourceReport` is a team-scoped document that groups multiple `ResourceAnalysis` records — one per channel or other resource — under a shared title, description, and date range. The report lifecycle looks like this:
+
+1. **Create** the report shell with a title, date range, and list of channels.
+2. **Generate** triggers background analysis tasks for each channel. Each task syncs messages, calls the LLM, and stores a `ResourceAnalysis` row.
+3. **Poll status** until the report reaches `COMPLETED` or `FAILED`.
+4. **Retrieve** the comprehensive analysis and drill into individual channel results.
+
+The `CrossResourceReport` model tracks aggregate statistics (`total_resources`, `completed_analyses`, `pending_analyses`, `failed_analyses`) so you can monitor progress without fetching every sub-analysis.
+
+## Create a Channel Report
+
+<Note>
+  Creating and generating cross-resource reports requires **admin** or **owner** role membership in the target team. Members with the `member` or `viewer` role can read existing reports but cannot create new ones.
+</Note>
+
+Use the simplified channel-report endpoint to create a new report directly from a list of Slack channel resource IDs:
+
+```text
+POST /api/v1/reports/{team_id}/channel-reports
+```
+
+<Steps>
+  <Step title="Assemble the channel list">
+    Collect the resource UUIDs for the channels you want to include. These are the `ServiceResource.id` values returned by `GET /api/v1/integrations/{integration_id}/resources`.
+  </Step>
+  <Step title="Submit the creation request">
+    Send a `POST` with the channel list, date range, and optional report metadata:
+
+    ```bash
+    curl -X POST \
+      "https://api.example.com/api/v1/reports/team-uuid/channel-reports" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "team_id": "team-uuid",
+        "title": "January 2024 Team Pulse",
+        "description": "Monthly contribution snapshot across core channels",
+        "channels": [
+          {
+            "id": "resource-uuid-general",
+            "name": "general",
+            "integration_id": "integration-uuid"
+          },
+          {
+            "id": "resource-uuid-engineering",
+            "name": "engineering",
+            "integration_id": "integration-uuid"
+          },
+          {
+            "id": "resource-uuid-product",
+            "name": "product",
+            "integration_id": "integration-uuid"
+          }
+        ],
+        "start_date": "2024-01-01T00:00:00Z",
+        "end_date": "2024-01-31T23:59:59Z",
+        "include_threads": true,
+        "include_reactions": true,
+        "analysis_type": "CONTRIBUTION"
+      }'
+    ```
+  </Step>
+  <Step title="Save the report ID">
+    The response returns a `CrossResourceReportResponse` with the new `id`. Store this UUID — you will use it to trigger generation and check status.
+  </Step>
+</Steps>
+
+**Request body fields:**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `team_id` | UUID | Yes | The team this report belongs to |
+| `channels` | array | Yes | List of channel objects, each with `id` (resource UUID), `name`, and `integration_id` |
+| `start_date` | ISO 8601 datetime | Yes | Start of the analysis window (maximum 180-day range enforced) |
+| `end_date` | ISO 8601 datetime | Yes | End of the analysis window |
+| `title` | string | No | Custom report title. Auto-generated if omitted |
+| `description` | string | No | Optional description |
+| `include_threads` | boolean | No | Include thread replies in analysis (default: `true`) |
+| `include_reactions` | boolean | No | Include emoji reactions in contributor scoring (default: `true`) |
+| `analysis_type` | string | No | One of `CONTRIBUTION`, `TOPICS`, `SENTIMENT`, `ACTIVITY` (default: `CONTRIBUTION`) |
+
+## Generate / Trigger Analysis
+
+Creating the report only creates the shell record with status `PENDING`. You must explicitly trigger generation to start the per-channel analysis tasks:
+
+```text
+POST /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/generate
+```
+
+```bash
+curl -X POST \
+  "https://api.example.com/api/v1/reports/team-uuid/cross-resource-reports/report-uuid/generate" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+**Response (`ReportGenerationResponse`):**
+
+```json
+{
+  "report_id": "report-uuid",
+  "status": "IN_PROGRESS",
+  "resource_analyses_created": 3,
+  "message": "Report generation started. Resource analyses will be processed in the background. Scheduled 3 analysis tasks."
+}
+```
+
+<Note>
+  Attempting to generate a report that is already `COMPLETED` or `IN_PROGRESS` will return a `400 Bad Request`. If a report previously failed, set its status back to `PENDING` before retrying.
+</Note>
+
+## Check Report Status
+
+Poll the report detail endpoint to monitor generation progress:
+
+```text
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}
+```
+
+```bash
+curl "https://api.example.com/api/v1/reports/team-uuid/cross-resource-reports/report-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+**Key fields in `CrossResourceReportResponse`:**
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | Current state: `PENDING`, `IN_PROGRESS`, `COMPLETED`, or `FAILED` |
+| `total_resources` | integer | Total number of channels included in the report |
+| `completed_analyses` | integer | Number of channel analyses that have finished successfully |
+| `pending_analyses` | integer | Number of channel analyses still queued or running |
+| `failed_analyses` | integer | Number of channel analyses that encountered errors |
+| `comprehensive_analysis` | string | LLM-generated narrative synthesizing insights across all channels (populated when `status` is `COMPLETED`) |
+| `model_used` | string | The OpenRouter model used for the comprehensive analysis |
+| `total_messages` | integer | Aggregate message count across all channels |
+| `total_participants` | integer | Unique participant count across all channels |
+| `total_threads` | integer | Total thread count across all channels |
+| `total_reactions` | integer | Total reaction count across all channels |
+
+**Status lifecycle:**
+
+```text
+PENDING → IN_PROGRESS → COMPLETED
+                      ↘ FAILED
+```
+
+A report reaches `COMPLETED` only when every `ResourceAnalysis` row has status `COMPLETED`. If any individual channel analysis fails, the report transitions to `FAILED`.
+
+## List Reports
+
+Retrieve all cross-resource reports for a team with optional filters and pagination:
+
+```text
+GET /api/v1/reports/{team_id}/cross-resource-reports
+```
+
+**Query parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `status` | string | — | Filter by status: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED` |
+| `start_date` | ISO 8601 datetime | — | Only reports whose `date_range_start` is on or after this date |
+| `end_date` | ISO 8601 datetime | — | Only reports whose `date_range_end` is on or before this date |
+| `resource_type` | string | — | Only reports that include at least one resource of this type: `SLACK_CHANNEL`, `GITHUB_REPO`, `NOTION_PAGE` |
+| `sort_by` | string | `created_at` | Field to sort by (`created_at`, `updated_at`, `date_range_start`, etc.) |
+| `sort_order` | string | `desc` | `asc` or `desc` |
+| `page` | integer | `1` | Page number (1-indexed) |
+| `page_size` | integer | `20` | Items per page (1–100) |
+
+```bash
+curl "https://api.example.com/api/v1/reports/team-uuid/cross-resource-reports?status=COMPLETED&sort_by=created_at&sort_order=desc&page=1&page_size=10" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+The response is a `PaginatedResponse` with `items`, `total`, `page`, `page_size`, and `pages` fields.
+
+## Resource Analyses
+
+Once a report is complete you can retrieve the individual channel-level results that make up the overall report:
+
+```text
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses
+```
+
+Each item in the response is a `ResourceAnalysisResponse` containing:
+
+- `resource_summary` — LLM-generated summary for this specific channel
+- `topic_analysis` — Topics identified in this channel
+- `contributor_insights` — Key contributors within this channel
+- `key_highlights` — Standout moments in this channel
+- `results` — JSON blob with `message_count`, `participant_count`, `thread_count`, `reaction_count`
+- `status` — Individual analysis status (`PENDING`, `IN_PROGRESS`, `COMPLETED`, `FAILED`)
+- `model_used` — Model used for this channel's analysis
+- `analysis_generated_at` — Timestamp the LLM response was received
+
+```bash
+curl "https://api.example.com/api/v1/reports/team-uuid/cross-resource-reports/report-uuid/resource-analyses" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+You can also fetch a single resource analysis by its ID:
+
+```text
+GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses/{analysis_id}
+```
+
+<Tip>
+  Use the resource analyses endpoint to identify which specific channel is responsible for a `FAILED` report status — check the `status` and any error context on each `ResourceAnalysis` row individually.
+</Tip>

@@ -1,0 +1,288 @@
+---
+title: "Integration Resources API — Channels, Sync, and Analysis"
+sidebarTitle: "Resources"
+description: "REST endpoints to list resources (channels, users), sync data, select channels, sync messages, and trigger LLM analysis for an integration."
+---
+
+Resources are the data objects that belong to an integration — for a Slack integration these are channels (`slack_channel`) and workspace users (`slack_user`). The resource endpoints let you inspect what was discovered, keep data current with the Slack API, mark channels for analysis, and ultimately run LLM-powered analyses that produce structured insights about team communication.
+
+---
+
+## List resources
+
+```http
+GET /api/v1/integrations/{integration_id}/resources
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the parent integration.
+</ParamField>
+
+<ParamField query="resource_type" type="string[]">
+  One or more resource type strings to filter by. Pass the parameter multiple times for OR filtering. Example: `?resource_type=slack_channel&resource_type=slack_user`.
+</ParamField>
+
+Returns an array of `ServiceResourceResponse` objects.
+
+<Expandable title="ServiceResourceResponse schema">
+  <ResponseField name="id" type="uuid">Unique identifier for this resource (matches the `SlackChannel.id` for channels).</ResponseField>
+  <ResponseField name="integration_id" type="uuid">UUID of the parent integration.</ResponseField>
+  <ResponseField name="resource_type" type="string">One of: `slack_channel`, `slack_user`, `slack_emoji`, `github_repository`, `github_issue`, `github_pr`, `github_webhook`, `notion_page`, `notion_database`, `notion_block`, `discord_guild`, `discord_channel`.</ResponseField>
+  <ResponseField name="external_id" type="string">The identifier used by the external service (e.g. the Slack channel ID `C01234ABCD`).</ResponseField>
+  <ResponseField name="name" type="string">Human-readable name (e.g. `#general`).</ResponseField>
+  <ResponseField name="metadata" type="object">Service-specific properties such as `type`, `purpose`, `topic`, `member_count`, `is_archived`.</ResponseField>
+  <ResponseField name="last_synced_at" type="datetime | null">When the resource was last synced from the external service.</ResponseField>
+  <ResponseField name="is_selected_for_analysis" type="boolean | null">For `slack_channel` resources, whether the channel is marked for analysis. Populated from the `SlackChannel` table.</ResponseField>
+  <ResponseField name="has_bot" type="boolean | null">For `slack_channel` resources, whether the Toban bot is present in the channel.</ResponseField>
+  <ResponseField name="created_at" type="datetime">Record creation timestamp.</ResponseField>
+  <ResponseField name="updated_at" type="datetime">Record last-updated timestamp.</ResponseField>
+</Expandable>
+
+---
+
+## Sync channels and users
+
+Triggers a full sync of channels and users from Slack using the stored OAuth token. After syncing, the resource list reflects current workspace membership and channel metadata.
+
+```http
+POST /api/v1/integrations/{integration_id}/sync
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the integration to sync. Requires `admin` permission on the owner team.
+</ParamField>
+
+Returns a summary object on success:
+
+```json
+{
+  "status": "success",
+  "message": "Resources synced successfully",
+  "synced": {
+    "channels": 42,
+    "users": 15
+  }
+}
+```
+
+<Warning>
+  Sync is currently only implemented for Slack integrations. Calling this endpoint on a non-Slack integration returns `400 Bad Request`.
+</Warning>
+
+---
+
+## Select channels for analysis
+
+Mark or unmark specific channels to indicate whether they should be included in future analyses.
+
+```http
+POST /api/v1/integrations/{integration_id}/resources/channel-selection
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the Slack integration.
+</ParamField>
+
+<ParamField body="channel_ids" type="string[]" required>
+  List of channel UUIDs (matching `ServiceResource.id` values) to update.
+</ParamField>
+
+<ParamField body="for_analysis" type="boolean" default="true">
+  `true` to mark the specified channels as selected; `false` to deselect them.
+</ParamField>
+
+Returns a success envelope with `integration_id`, `workspace_id`, `slack_workspace_id`, and the underlying selection `result`.
+
+---
+
+## Sync messages for a channel
+
+Syncs messages for a specific Slack channel resource, pulling the latest data from Slack into the local database before analysis.
+
+```http
+POST /api/v1/integrations/{integration_id}/resources/{resource_id}/sync-messages
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the parent integration.
+</ParamField>
+
+<ParamField path="resource_id" type="uuid" required>
+  UUID of the `slack_channel` resource to sync.
+</ParamField>
+
+<ParamField query="start_date" type="datetime">
+  ISO 8601 start of the sync window. Defaults to 30 days before `end_date`.
+</ParamField>
+
+<ParamField query="end_date" type="datetime">
+  ISO 8601 end of the sync window. Defaults to the current UTC time.
+</ParamField>
+
+<ParamField query="include_replies" type="boolean" default="true">
+  Whether to fetch thread replies alongside top-level messages.
+</ParamField>
+
+<ParamField query="sync_threads" type="boolean" default="true">
+  Whether to run a dedicated thread-reply sync pass after the main message sync.
+</ParamField>
+
+<ParamField query="thread_days" type="integer" default="30">
+  Number of recent days of threads to include in the thread sync pass. Must be between `1` and `90`.
+</ParamField>
+
+Returns a summary on success:
+
+```json
+{
+  "status": "success",
+  "message": "Synced 284 messages and 41 thread replies",
+  "sync_results": {
+    "new_message_count": 284,
+    "replies_synced": 41
+  },
+  "workspace_id": "018e1234-abcd-7000-8000-000000000002",
+  "channel_id": "018e1234-abcd-7000-8000-000000000003"
+}
+```
+
+<Tip>
+  Always sync messages for a channel before triggering an analysis. Without up-to-date messages in the database, the analysis will reflect stale data. A typical workflow is: **sync resources → select channels → sync messages → run analysis**.
+</Tip>
+
+---
+
+## Analyze a channel
+
+Sends channel messages to the configured LLM (via OpenRouter) and returns structured AI-generated insights. The result is persisted as a `ResourceAnalysis` record and linked to an auto-created `CrossResourceReport`.
+
+```http
+POST /api/v1/integrations/{integration_id}/resources/{resource_id}/analyze
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the parent integration.
+</ParamField>
+
+<ParamField path="resource_id" type="uuid" required>
+  UUID of the `slack_channel` resource to analyze.
+</ParamField>
+
+<ParamField body="start_date" type="datetime">
+  Beginning of the analysis period. Defaults to 30 days before `end_date`.
+</ParamField>
+
+<ParamField body="end_date" type="datetime">
+  End of the analysis period. Defaults to the current UTC time.
+</ParamField>
+
+<ParamField body="include_threads" type="boolean" default="true">
+  Whether to include thread replies in the message set sent to the LLM.
+</ParamField>
+
+<ParamField body="include_reactions" type="boolean" default="true">
+  Whether to include reaction counts in the data sent to the LLM.
+</ParamField>
+
+<ParamField body="model" type="string">
+  Override the default LLM model identifier (OpenRouter model string, e.g. `"openai/gpt-4o"`). Leave empty to use the system default.
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.example.com/api/v1/integrations/018e1234-abcd-7000-8000-000000000001/resources/018e1234-abcd-7000-8000-000000000003/analyze" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_date": "2024-06-01T00:00:00Z",
+    "end_date": "2024-06-30T23:59:59Z",
+    "include_threads": true,
+    "include_reactions": true,
+    "model": "openai/gpt-4o"
+  }'
+```
+</CodeGroup>
+
+#### AnalysisResponse
+
+<ResponseField name="analysis_id" type="string">UUID of the persisted `ResourceAnalysis` record.</ResponseField>
+<ResponseField name="channel_id" type="string">UUID of the channel that was analyzed.</ResponseField>
+<ResponseField name="channel_name" type="string">Display name of the channel (without `#` prefix).</ResponseField>
+<ResponseField name="period" type="object">
+  The analysis time window.
+  <Expandable title="period fields">
+    <ResponseField name="start" type="datetime">Start of the analysis period.</ResponseField>
+    <ResponseField name="end" type="datetime">End of the analysis period.</ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="stats" type="object">
+  Aggregated message statistics for the period.
+  <Expandable title="stats fields">
+    <ResponseField name="message_count" type="integer">Total number of messages processed.</ResponseField>
+    <ResponseField name="participant_count" type="integer">Number of unique participants.</ResponseField>
+    <ResponseField name="thread_count" type="integer">Number of thread parent messages.</ResponseField>
+    <ResponseField name="reaction_count" type="integer">Total reaction count across all messages.</ResponseField>
+  </Expandable>
+</ResponseField>
+<ResponseField name="channel_summary" type="string">LLM-generated prose summary of channel purpose and overall activity.</ResponseField>
+<ResponseField name="topic_analysis" type="string">LLM-generated description of the main discussion topics in the period.</ResponseField>
+<ResponseField name="contributor_insights" type="string">LLM-generated breakdown of key contributors and their communication patterns.</ResponseField>
+<ResponseField name="key_highlights" type="string">LLM-generated list of notable discussions or decisions worth highlighting.</ResponseField>
+<ResponseField name="model_used" type="string">The LLM model identifier that produced this analysis.</ResponseField>
+<ResponseField name="generated_at" type="datetime">UTC timestamp when the analysis was generated.</ResponseField>
+<ResponseField name="report_id" type="string">UUID of the auto-created `CrossResourceReport` that links this analysis.</ResponseField>
+<ResponseField name="team_id" type="string">UUID of the owning team.</ResponseField>
+
+---
+
+## List stored analyses
+
+Returns previously run analyses for a channel, ordered by most recent first.
+
+```http
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses
+```
+
+<ParamField path="integration_id" type="uuid" required>UUID of the parent integration.</ParamField>
+<ParamField path="resource_id" type="uuid" required>UUID of the channel resource.</ParamField>
+
+<ParamField query="limit" type="integer" default="10">
+  Maximum number of analyses to return. Must be between `1` and `100`.
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Zero-based offset for pagination.
+</ParamField>
+
+Returns an array of `StoredAnalysisResponse` objects — the same shape as `AnalysisResponse` but retrieved from persisted records.
+
+---
+
+## Get latest analysis
+
+Returns the single most recent `StoredAnalysisResponse` for a channel, or `null` if no analyses exist yet.
+
+```http
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses/latest
+```
+
+<ParamField path="integration_id" type="uuid" required>UUID of the parent integration.</ParamField>
+<ParamField path="resource_id" type="uuid" required>UUID of the channel resource.</ParamField>
+
+---
+
+## Get a specific analysis
+
+Retrieves a single stored analysis by its ID.
+
+```http
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analysis/{analysis_id}
+```
+
+<ParamField path="integration_id" type="uuid" required>UUID of the parent integration.</ParamField>
+<ParamField path="resource_id" type="uuid" required>UUID of the channel resource.</ParamField>
+<ParamField path="analysis_id" type="string" required>
+  UUID of the analysis to retrieve. Legacy string-format IDs (`analysis_{channel_id}_{timestamp}`) are resolved to the nearest matching record for backwards compatibility.
+</ParamField>
+
+Returns a `StoredAnalysisResponse` or `404 Not Found` if the analysis does not exist.

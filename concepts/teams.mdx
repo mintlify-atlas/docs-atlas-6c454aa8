@@ -1,0 +1,106 @@
+---
+title: "Teams and Role-Based Access Control in Toban"
+sidebarTitle: "Teams"
+description: "Toban organizes users into teams with owner, admin, and member roles. Each team owns integrations and reports, with access scoped to team members."
+---
+
+Teams are the central organizing unit in Toban. Every integration, Slack workspace connection, and contribution report belongs to exactly one team. By grouping users into teams, Toban ensures that data from your connected services is only visible to the people who should see it — nothing bleeds across team boundaries. When you sign up, a personal team is automatically created for you, and you can create or join additional teams to collaborate with colleagues.
+
+<Note>
+  Toban uses Supabase JWT-based authentication. Every API request carries a signed JWT, and the backend extracts the `user_id` from that token automatically. There is no separate "login to a team" step — your identity follows you, and your role within each team governs what you can do.
+</Note>
+
+## Team structure
+
+A `Team` record captures the basic identity and metadata for an organizational unit. The following fields are stored on every team:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier for the team |
+| `name` | string | Human-readable display name (max 255 characters) |
+| `slug` | string | URL-safe unique identifier used in API paths and links |
+| `description` | text | Optional longer description of the team's purpose |
+| `avatar_url` | string | Optional URL to the team's logo or avatar image |
+| `is_personal` | boolean | Whether this is a single-user personal team (see below) |
+| `created_by_user_id` | string | The `user_id` of the person who created the team |
+| `created_by_email` | string | Optional email of the creator, stored for reference |
+| `team_size` | integer | Cached count of active team members |
+| `team_metadata` | JSONB | Freeform JSON for additional service-specific configuration |
+
+The `slug` field is globally unique and enforced by a database index. It is used to construct human-readable URLs and must be URL-safe.
+
+## Member roles
+
+Every team member is assigned one of four roles, defined by the `TeamMemberRole` enum. Roles are hierarchical — owners have the broadest permissions and viewers have the narrowest.
+
+| Role | Create Integrations | Generate Reports | Invite Members | View Data |
+|---|---|---|---|---|
+| `owner` | ✅ | ✅ | ✅ | ✅ |
+| `admin` | ✅ | ✅ | ✅ | ✅ |
+| `member` | ❌ | ✅ | ❌ | ✅ |
+| `viewer` | ❌ | ❌ | ❌ | ✅ |
+
+- **Owner** — the team creator or a promoted admin. Only owners can delete the team or transfer ownership. There is always at least one owner per team.
+- **Admin** — trusted collaborators who can manage integrations, share them with other teams, and invite new members.
+- **Member** — standard contributors who can run analyses and view reports but cannot change team settings or add new integrations.
+- **Viewer** — read-only observers. They can see all reports and data within the team but cannot trigger any writes.
+
+<Tip>
+  When programmatically checking access, use the `require_team_admin` or `require_team_member` dependency helpers in `app.core.team_scoped_access`. These wrap the `TeamScopedAccess` class and raise a `403 Forbidden` automatically when the user's role is insufficient.
+</Tip>
+
+## Team membership
+
+The `TeamMember` model joins a user to a team and records their role and invitation state. Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier for the membership record |
+| `team_id` | UUID | Foreign key to the parent `Team` |
+| `user_id` | string | The authenticated user's Supabase ID |
+| `email` | string | Optional email address for the member |
+| `display_name` | string | Optional human-readable name shown in the UI |
+| `role` | `TeamMemberRole` | One of `owner`, `admin`, `member`, `viewer` |
+| `invitation_status` | string | One of `active`, `pending` — tracks whether an invite has been accepted |
+| `invitation_token` | string | Short-lived token sent in invitation emails |
+| `invitation_expires_at` | datetime | When the pending invitation token expires |
+| `last_active_at` | datetime | Timestamp of the member's most recent activity |
+
+The combination of `(team_id, user_id)` is unique — a user can only hold one membership per team at a time.
+
+## Personal teams
+
+When `is_personal` is `true`, the team was created automatically for a single user during sign-up. Personal teams:
+
+- Are named after the user and have a slug derived from their identity.
+- Always have exactly one member — the owner.
+- Cannot be shared with other users or have additional members added.
+- Provide a private workspace for individual integrations and reports before you are ready to collaborate.
+
+Personal teams behave identically to regular teams in terms of data storage and API routes; the `is_personal` flag simply signals to the UI that certain multi-user actions (invitations, sharing) should be hidden.
+
+## Team scoping
+
+All integrations, Slack workspaces, and cross-resource reports carry a `team_id` foreign key. The API enforces this scope through the `check_team_access` function defined in `app.core.team_scoped_access`:
+
+```python
+async def check_team_access(
+    team_id: UUID,
+    user_id: str,
+    db: AsyncSession,
+    roles: Optional[List[TeamMemberRole]] = None,
+) -> bool:
+```
+
+Every protected endpoint calls `check_team_access` (or the equivalent `TeamScopedAccess` FastAPI dependency) before touching any data. The function:
+
+1. Looks up the `TeamMember` record for the given `(team_id, user_id)` pair.
+2. Returns `False` (access denied) if no membership record exists.
+3. If specific `roles` are required, confirms the member's role is in the allowed list.
+4. Returns `True` only when all checks pass.
+
+This means a user who is a member of Team A **cannot** access integrations or reports owned by Team B, even if they somehow know the resource UUIDs.
+
+<Warning>
+  Membership checks happen at the API layer, not the database query layer. Always use the `TeamScopedAccess` dependency or call `check_team_access` explicitly — do not rely on coincidentally scoped queries alone to enforce access control.
+</Warning>

@@ -1,0 +1,142 @@
+{
+  "projectType": "saas",
+  "projectName": "Toban Contribution Viewer",
+  "projectDescription": "An AI-powered analytics platform that connects to Slack (and optionally GitHub/Notion), collects activity data, and generates LLM-driven contribution insights and visualizations for teams.",
+  "theme": "luma",
+  "primaryColor": "#3fcf8e",
+  "lightColor": "#1c1c1c",
+  "darkColor": "#2c7c5c",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "self-hosting"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/teams",
+              "concepts/integrations",
+              "concepts/analysis"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/slack-integration",
+              "guides/channel-analysis",
+              "guides/cross-resource-reports",
+              "guides/authentication"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/environment-variables",
+              "configuration/deployment"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Teams",
+            "pages": [
+              "api/teams/teams",
+              "api/teams/members"
+            ]
+          },
+          {
+            "group": "Slack",
+            "pages": [
+              "api/slack/oauth",
+              "api/slack/workspaces",
+              "api/slack/channels",
+              "api/slack/messages"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "api/integrations/integrations",
+              "api/integrations/resources"
+            ]
+          },
+          {
+            "group": "Reports",
+            "pages": [
+              "api/reports/cross-resource-reports",
+              "api/reports/resource-analyses"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Slack OAuth integration for connecting workspaces",
+    "Automatic channel message sync with configurable date ranges",
+    "LLM-powered channel analysis via OpenRouter (Claude, GPT-4, etc.)",
+    "Contribution scoring with topic extraction and key-highlight identification",
+    "Cross-resource reports spanning multiple channels",
+    "Team management with role-based access control (owner, admin, member)",
+    "Supabase JWT authentication with per-request user identity",
+    "PostgreSQL persistence with Alembic migrations",
+    "React + Chakra UI dashboard with analytics views",
+    "Docker Compose development environment + AWS deployment via CDK"
+  ],
+  "publicApiSurface": [
+    "GET /api/v1/teams/ — list teams for current user",
+    "POST /api/v1/teams/ — create a team",
+    "GET /api/v1/teams/{team_id}/members — list team members",
+    "POST /api/v1/teams/{team_id}/members — add team member",
+    "GET /api/v1/slack/oauth-url — generate Slack OAuth URL",
+    "GET /api/v1/slack/oauth-callback — handle Slack OAuth callback",
+    "GET /api/v1/slack/workspaces — list connected workspaces",
+    "GET /api/v1/slack/workspaces/{workspace_id}/verify — verify workspace token",
+    "DELETE /api/v1/slack/workspaces/{workspace_id} — disconnect workspace",
+    "GET /api/v1/slack/workspaces/{workspace_id}/sync-status — get sync status",
+    "GET /api/v1/slack/workspaces/{workspace_id}/channels — list channels",
+    "POST /api/v1/slack/workspaces/{workspace_id}/channels/sync — sync channels",
+    "POST /api/v1/slack/workspaces/{workspace_id}/channels/select — select channels for analysis",
+    "GET /api/v1/integrations — list integrations",
+    "POST /api/v1/integrations — create integration",
+    "POST /api/v1/integrations/slack — create/update Slack integration via OAuth",
+    "GET /api/v1/integrations/{integration_id} — get integration",
+    "PUT /api/v1/integrations/{integration_id} — update integration",
+    "GET /api/v1/integrations/{integration_id}/resources — list resources",
+    "POST /api/v1/integrations/{integration_id}/sync — sync resources",
+    "POST /api/v1/integrations/{integration_id}/resources/{resource_id}/sync-messages — sync messages",
+    "POST /api/v1/integrations/{integration_id}/resources/{resource_id}/analyze — analyze channel",
+    "GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses — list analyses",
+    "GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses/latest — latest analysis",
+    "POST /api/v1/integrations/{integration_id}/share — share integration",
+    "DELETE /api/v1/integrations/{integration_id}/share/{team_id} — revoke share",
+    "GET /api/v1/reports/{team_id}/cross-resource-reports — list reports",
+    "POST /api/v1/reports/{team_id}/cross-resource-reports — create report",
+    "GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id} — get report",
+    "PUT /api/v1/reports/{team_id}/cross-resource-reports/{report_id} — update report",
+    "DELETE /api/v1/reports/{team_id}/cross-resource-reports/{report_id} — delete report",
+    "POST /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/generate — generate report",
+    "POST /api/v1/reports/{team_id}/channel-reports — create channel-based report",
+    "GET /api/v1/reports/{team_id}/cross-resource-reports/{report_id}/resource-analyses — list resource analyses",
+    "GET /health — health check",
+    "GET / — root"
+  ]
+}

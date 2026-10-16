@@ -1,47 +1,224 @@
 ---
-title: "Quickstart"
-description: "Begin with a guide on the fastest path to a successful outcome"
+title: "Get Started with Toban Contribution Viewer"
+sidebarTitle: "Quickstart"
+description: "Run Toban's backend and frontend locally using Docker Compose in under 10 minutes. Includes environment setup, Supabase configuration, and first login."
 ---
 
-Describe how someone begins using your product. What is the first thing they need to do? Are there any prerequisites?
+This guide walks you through cloning the Toban Contribution Viewer repository, configuring your environment variables, and launching the full stack — PostgreSQL database, FastAPI backend, and React frontend — on your local machine using Docker Compose. By the end you will have a working application at `http://localhost:5173` with a live API at `http://localhost:8000`.
 
-A quickstart should take someone from zero to using your product. They'll get a quick win and a sense of what they can accomplish.
-
-## Prerequisites
-
-Before you begin, you must have:
-
-- Requirement one (for example, Node.js 18+, a free account, an API key)
-- Requirement two (for example, a compatible device, a compatible browser, a compatible operating system)
-
-## Get started
+## Docker Setup (Recommended)
 
 <Steps>
-  <Step title="Install">
-    Describe how to install your product or sign up.
+  <Step title="Verify Prerequisites">
+    Before you begin, confirm the following are available on your machine:
 
+    - **Docker** with the Compose plugin (Docker Desktop for Mac/Windows includes this; on Linux install the `docker-compose-plugin` package)
+    - **A Supabase project** — create one at [supabase.com](https://supabase.com). From **Project Settings → API** you will need:
+      - Project URL
+      - Anon (public) key
+      - Service Role key
+      - JWT Secret (under **JWT Settings**)
+    - **An OpenRouter API key** — sign up at [openrouter.ai](https://openrouter.ai)
+
+    <Note>
+      You do **not** need a local PostgreSQL installation. Docker Compose starts a `postgres:13` container automatically.
+    </Note>
+  </Step>
+
+  <Step title="Clone the Repository">
     ```bash
-    npm install your-package
+    git clone https://github.com/hackdays-io/toban-contribution-viewer.git
+    cd toban-contribution-viewer
     ```
   </Step>
-  <Step title="Configure">
-    Describe any setup or configuration needed before first use.
+
+  <Step title="Configure Environment Variables">
+    All Docker services read from a single `.env.docker` file in the project root. Copy the provided example and fill in your values:
 
     ```bash
-    your-cli init
+    cp .env.docker.example .env.docker
+    ```
+
+    Open `.env.docker` in your editor and set the following required variables:
+
+    | Variable | Description |
+    |---|---|
+    | `POSTGRES_USER` | Database username (default: `toban_admin`) |
+    | `POSTGRES_PASSWORD` | Database password (default: `postgres`) |
+    | `POSTGRES_DB` | Database name (default: `tobancv`) |
+    | `SUPABASE_URL` | Your Supabase project URL |
+    | `SUPABASE_KEY` | Your Supabase **service role** key |
+    | `SUPABASE_JWT_SECRET` | Your Supabase JWT signing secret |
+    | `SUPABASE_ANON_KEY` | Your Supabase anon/public key |
+    | `OPENROUTER_API_KEY` | Your OpenRouter API key |
+
+    <Warning>
+      The `SUPABASE_JWT_SECRET` must be identical in both the frontend and backend configurations. The backend uses it to validate JWT tokens issued by Supabase. If these values differ, all authenticated API requests will return `401 Unauthorized`.
+    </Warning>
+
+    The following variables are optional but needed for specific features:
+
+    | Variable | Description |
+    |---|---|
+    | `NGROK_URL` | Full HTTPS ngrok URL (e.g. `https://xyz.ngrok-free.app`) — required for Slack OAuth in local dev |
+    | `NGROK_AUTHTOKEN` | Your ngrok auth token |
+    | `GITHUB_CLIENT_ID` / `GITHUB_CLIENT_SECRET` | GitHub integration (roadmap feature) |
+    | `NOTION_API_KEY` | Notion integration (roadmap feature) |
+
+    <Note>
+      Slack credentials (Client ID, Client Secret, Signing Secret) are entered directly in the Toban UI after you log in. They are **not** required as environment variables.
+    </Note>
+  </Step>
+
+  <Step title="Start the Containers">
+    Make the helper script executable (first time only), then start the stack:
+
+    ```bash
+    chmod +x ./docker-dev.sh
+    ./docker-dev.sh start
+    ```
+
+    This command runs `docker compose --env-file .env.docker up -d`, which starts three containers:
+    - `tobancv-postgres` — PostgreSQL 13 database
+    - `tobancv-backend` — FastAPI application with hot-reload
+    - `tobancv-frontend` — React/Vite development server with hot-reload
+
+    Wait for all containers to reach a healthy state. You can monitor startup with:
+
+    ```bash
+    ./docker-dev.sh logs
     ```
   </Step>
-  <Step title="Run it">
-    Show the first thing a user does to see it working.
+
+  <Step title="Apply Database Migrations">
+    Once the backend container is running, apply all Alembic migrations to create the database schema:
 
     ```bash
-    your-cli start
+    docker exec tobancv-backend alembic upgrade head
     ```
+
+    You can verify the migration status at any time:
+
+    ```bash
+    docker exec tobancv-backend alembic current
+    ```
+  </Step>
+
+  <Step title="Access the Application">
+    The stack exposes three endpoints:
+
+    | Service | URL | Description |
+    |---|---|---|
+    | Frontend | [http://localhost:5173](http://localhost:5173) | React application |
+    | Backend API | [http://localhost:8000](http://localhost:8000) | FastAPI root |
+    | API Docs | [http://localhost:8000/docs](http://localhost:8000/docs) | Interactive OpenAPI documentation |
+
+    Open [http://localhost:5173](http://localhost:5173) in your browser to reach the Toban dashboard.
+  </Step>
+
+  <Step title="Sign In with Supabase Auth">
+    Toban uses Supabase for authentication. On your first visit:
+
+    1. Click **Sign up** and register with an email and password (or any social provider you enabled in Supabase).
+    2. Supabase will send a confirmation email — click the link to verify your account.
+    3. Sign in. Supabase returns a JWT that the frontend stores in the browser and sends with every API request.
+    4. The backend validates this JWT using the `SUPABASE_JWT_SECRET` you configured in `.env.docker`.
+
+    After signing in you will land on the Toban dashboard. From there you can navigate to the **Integrations** section to connect your Slack workspace by entering your Slack app credentials directly in the UI.
+
+    <Tip>
+      To add `http://localhost:5173/auth/callback` as a valid redirect URL in Supabase, go to **Authentication → URL Configuration** in your Supabase project dashboard.
+    </Tip>
   </Step>
 </Steps>
 
-<Tip>
-  Give people a way to get help. This could be a link to a support page, a chat with a customer support agent, or a forum for your product.
+## `docker-dev.sh` Command Reference
 
-  Example: Need help? Reach out to us at [support@yourcompany.com](mailto:support@yourcompany.com).
-</Tip>
+The `docker-dev.sh` helper wraps common Docker Compose operations and ensures the correct `--env-file .env.docker` flag is always passed.
+
+| Command | Description |
+|---|---|
+| `./docker-dev.sh start` | Start all containers in detached mode |
+| `./docker-dev.sh stop` | Stop and remove containers |
+| `./docker-dev.sh restart` | Restart all containers |
+| `./docker-dev.sh rebuild` | Rebuild images and restart (use after dependency changes) |
+| `./docker-dev.sh logs` | Stream logs from all containers |
+| `./docker-dev.sh test-backend` | Run the Python test suite inside the backend container |
+| `./docker-dev.sh test-frontend` | Run the frontend test suite inside the frontend container |
+| `./docker-dev.sh backend <cmd>` | Execute an arbitrary command in the backend container |
+| `./docker-dev.sh frontend <cmd>` | Execute an arbitrary command in the frontend container |
+
+Examples:
+
+```bash
+# Run backend tests with coverage
+./docker-dev.sh backend python -m pytest --cov=app --cov-report=term-missing
+
+# Run frontend linter
+./docker-dev.sh frontend npm run lint
+
+# Check which environment variables are loaded in the backend
+./docker-dev.sh backend printenv | grep SUPABASE
+```
+
+## Local Development Without Docker
+
+If you prefer to run the backend and frontend directly on your host machine, follow the manual setup below. You will need **Python 3.9+**, **Node.js 18+**, and a running **PostgreSQL 13+** instance.
+
+### Backend
+
+<CodeGroup>
+```bash Setup virtualenv and install dependencies
+cd backend
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+```bash Configure and run
+cp .env.example .env
+# Edit .env with your DATABASE_URL, SUPABASE_URL, SUPABASE_KEY,
+# SUPABASE_JWT_SECRET, OPENROUTER_API_KEY, etc.
+uvicorn app.main:app --reload
+```
+</CodeGroup>
+
+The backend `.env` file accepts the following key variables (see `backend/.env.example` for the full list):
+
+```ini
+DEBUG=True
+DATABASE_URL=postgresql://toban_admin:postgres@localhost/tobancv
+SUPABASE_URL=your_supabase_url
+SUPABASE_KEY=your_supabase_service_role_key
+SUPABASE_JWT_SECRET=your_supabase_jwt_secret
+OPENROUTER_API_KEY=your_openrouter_api_key
+OPENROUTER_DEFAULT_MODEL=anthropic/claude-3-sonnet:20240229
+LOG_LEVEL=INFO
+```
+
+### Frontend
+
+<CodeGroup>
+```bash Install dependencies and run dev server
+cd frontend
+npm install
+cp .env.example .env.local
+# Edit .env.local with your values
+npm run dev
+```
+
+```bash Verify environment before build
+npm run check-env
+```
+</CodeGroup>
+
+The frontend `.env.local` file requires:
+
+```ini
+VITE_API_URL=http://localhost:8000/api/v1
+VITE_SUPABASE_URL=your_supabase_url
+VITE_SUPABASE_ANON_KEY=your_supabase_anon_key
+VITE_AUTH_REDIRECT_URI=http://localhost:5173/auth/callback
+```
+
+With both servers running, the application is available at the same URLs as the Docker setup: frontend on port `5173` and backend on port `8000`.

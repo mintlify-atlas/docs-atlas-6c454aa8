@@ -1,0 +1,69 @@
+---
+title: "Toban Contribution Viewer: AI Team Analytics Platform"
+sidebarTitle: "Introduction"
+description: "Toban Contribution Viewer collects Slack activity data and uses LLMs to surface contribution insights, topic trends, and team communication patterns."
+---
+
+Toban Contribution Viewer is an AI-powered analytics platform that extracts, analyzes, and visualizes how your team contributes across digital workspaces. By connecting to Slack via OAuth and processing messages with large language models through OpenRouter, Toban surfaces contribution patterns that are invisible in traditional reporting — transforming raw activity data into actionable insights about who is driving conversations, sharing knowledge, and keeping the team aligned.
+
+## The Problem It Solves
+
+Modern teams produce enormous volumes of digital communication, yet most organizations still rely on anecdotal evidence or surface-level metrics when assessing contribution and performance. Critical contributors — the person who consistently unblocks others in Slack threads, the teammate who distills complex discussions into clear summaries — rarely show up in commit counts or ticket closures. Toban exists to change that.
+
+- **Recognize hidden contributors** — Identify team members whose valuable work goes unnoticed in traditional performance reviews by quantifying message quality, knowledge-sharing, and coordination effort.
+- **Understand communication patterns** — Discover how information flows across channels, which topics dominate team discussion, and where conversations lead to action.
+- **Make data-driven team decisions** — Replace gut-feel assessments with comprehensive contribution metrics, trend detection, and exportable reports that support objective team management.
+- **Foster a culture of recognition** — Give every form of contribution — problem-solving, encouragement, mentoring — the visibility it deserves.
+
+## How It Works
+
+Toban follows a three-stage pipeline from raw workspace activity to human-readable insight.
+
+1. **Data collection** — Users connect their Slack workspace via a standard OAuth flow. Toban then periodically syncs messages, reactions, and user profiles from configured channels using the Slack API, storing everything in a PostgreSQL database.
+2. **AI-powered analysis** — Collected messages are passed to LLMs via the OpenRouter API. Models perform content classification, contribution quality assessment, topic extraction, key discussion highlights, and anomaly detection across configurable date ranges and channel sets.
+3. **Reporting and visualization** — Processed results are exposed through an interactive dashboard. Individual contributor profiles, time-series activity charts, and team-level summaries give managers and team members a complete picture. Reports can be exported for performance review cycles.
+
+## Technical Architecture
+
+Toban is a full-stack web application built from modern, open-source components.
+
+| Layer | Technology |
+|---|---|
+| Backend API | Python 3.9+ with FastAPI, SQLAlchemy ORM, Alembic migrations |
+| Frontend | React with TypeScript and Chakra UI |
+| Database | PostgreSQL 13+ |
+| Authentication | Supabase Auth (open-source Auth0 alternative) |
+| AI / LLM access | OpenRouter API (Claude, GPT-4, and other models) |
+| Hosting | AWS (Elastic Beanstalk for backend, S3 + CloudFront for frontend) |
+
+The backend exposes a versioned REST API under `/api/v1` and is documented automatically via FastAPI's built-in OpenAPI integration at `/docs`. The frontend communicates with the backend using JWT tokens issued by Supabase, which the backend validates using the shared `SUPABASE_JWT_SECRET`. Docker Compose orchestrates the full stack for local development with a single helper script.
+
+## What You Need
+
+Before running Toban, make sure you have the following accounts and credentials ready:
+
+- **Supabase project** — Create a free project at [supabase.com](https://supabase.com). You will need the Project URL, the Anon Key, the Service Role Key, and the JWT Secret. Enable email/password sign-in and add `http://localhost:5173/auth/callback` as a redirect URL for local development.
+- **PostgreSQL database** — Provided automatically when using Docker Compose. For production deployments, you will need an accessible PostgreSQL 13+ instance (e.g., AWS RDS).
+- **OpenRouter API key** — Sign up at [openrouter.ai](https://openrouter.ai) to get API access to Claude, GPT-4, and other models. Set a default model such as `anthropic/claude-3-sonnet:20240229` in your configuration.
+- **Slack app** — Create an app at [api.slack.com/apps](https://api.slack.com/apps) with the required OAuth scopes (`channels:history`, `channels:read`, `users:read`, and others listed in the Slack Integration guide). Slack credentials are entered directly in the Toban UI after login — no environment variable is needed.
+
+<Note>
+  Slack is the primary and most complete integration available today. GitHub and Notion integrations are present in the codebase and behind feature flags, but are on the roadmap for full support. The OAuth scopes, data models, and AI analysis pipeline are all production-ready for Slack workspaces.
+</Note>
+
+## Explore the Docs
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Run the full stack locally with Docker Compose in under 10 minutes.
+  </Card>
+  <Card title="Slack Integration" icon="slack" href="/guides/slack-integration">
+    Configure your Slack app, OAuth scopes, and ngrok for local development.
+  </Card>
+  <Card title="Teams & Contributors" icon="users" href="/concepts/teams">
+    Understand how Toban models workspaces, channels, users, and contributions.
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the FastAPI-generated OpenAPI documentation for all endpoints.
+  </Card>
+</CardGroup>

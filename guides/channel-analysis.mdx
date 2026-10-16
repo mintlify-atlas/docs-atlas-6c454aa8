@@ -1,0 +1,241 @@
+---
+title: "Analyze Slack Channels with LLM-Powered Insights"
+sidebarTitle: "Channel Analysis"
+description: "Sync Slack channel messages into Toban, then trigger an LLM analysis to generate topic summaries, contributor insights, and key highlights."
+---
+
+Once your Slack workspace is connected, Toban can reach into any channel, pull a date-range of messages and thread replies, feed them to an OpenRouter LLM, and return structured insights about who is contributing, what topics are active, and which discussions stand out. This guide covers the full cycle: selecting channels, syncing messages, running analysis, and reading the results.
+
+## Prerequisites
+
+Before running an analysis you need:
+
+- A connected Slack workspace (see [Connect a Slack Workspace](/guides/slack-integration))
+- An integration ID — returned when you create the Slack integration via `POST /api/v1/integrations/slack`
+- A resource ID — the UUID of the `ServiceResource` row representing the channel, returned in `GET /api/v1/integrations/{integration_id}/resources`
+- An OpenRouter API key set in `OPENROUTER_API_KEY` on the backend
+
+## End-to-End Flow
+
+<Steps>
+  <Step title="Select channels for analysis">
+    Mark which channels should be tracked. This call sets `is_selected_for_analysis = true` on the underlying `SlackChannel` records and instructs the bot to join those channels.
+
+    ```bash
+    curl -X POST "https://api.example.com/api/v1/integrations/integration-uuid/resources/channel-selection" \
+      -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+      -H "Content-Type: application/json" \
+      -d '{
+        "channel_ids": ["resource-uuid-1", "resource-uuid-2"],
+        "for_analysis": true
+      }'
+    ```
+
+    Set `for_analysis: false` to deselect channels. The bot will not attempt to join channels that are not selected.
+  </Step>
+  <Step title="Sync messages">
+    Pull the latest messages from Slack into the Toban database for the channel you want to analyze. Syncing before every analysis ensures the freshest data.
+  </Step>
+  <Step title="Run analysis">
+    Submit the analysis request with your desired date range and model. Toban retrieves the synced messages, formats them for the LLM, and returns structured insights.
+  </Step>
+  <Step title="Read results">
+    Inspect the `AnalysisResponse` for the channel summary, topic breakdown, contributor highlights, and raw stats.
+  </Step>
+  <Step title="Retrieve stored analyses">
+    All completed analyses are persisted. Use the list and latest endpoints to fetch previous results without re-running the LLM.
+  </Step>
+</Steps>
+
+## Select Channels for Analysis
+
+Channels must be explicitly selected before Toban will sync or analyze them. Use the integration-scoped endpoint to select channels by their resource UUIDs:
+
+```text
+POST /api/v1/integrations/{integration_id}/resources/channel-selection
+```
+
+**Request body:**
+
+```json
+{
+  "channel_ids": ["resource-uuid-channel-general", "resource-uuid-channel-engineering"],
+  "for_analysis": true
+}
+```
+
+Alternatively, the legacy workspace-scoped endpoint is also available:
+
+```text
+POST /api/v1/slack/workspaces/{workspace_id}/channels/select
+```
+
+Both endpoints accept a list of channel UUIDs and a boolean flag. Setting `for_analysis: true` selects; `false` deselects.
+
+## Sync Messages
+
+Sync pulls the Slack message history for a specific channel into the database. Run this before each analysis to capture recent activity.
+
+```text
+POST /api/v1/integrations/{integration_id}/resources/{resource_id}/sync-messages
+```
+
+All parameters are query strings:
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `start_date` | ISO 8601 datetime | 30 days ago | Earliest message timestamp to sync |
+| `end_date` | ISO 8601 datetime | now | Latest message timestamp to sync |
+| `include_replies` | boolean | `true` | Whether to pull thread replies |
+| `sync_threads` | boolean | `true` | Whether to explicitly sync thread reply chains |
+| `thread_days` | integer (1–90) | `30` | How many days of thread messages to include |
+
+<CodeGroup>
+```bash curl
+curl -X POST \
+  "https://api.example.com/api/v1/integrations/integration-uuid/resources/resource-uuid/sync-messages?start_date=2024-01-01T00:00:00Z&end_date=2024-01-31T23:59:59Z&include_replies=true" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Synced 412 messages and 87 thread replies",
+  "sync_results": {
+    "new_message_count": 412,
+    "replies_synced": 87,
+    "skipped_count": 0
+  },
+  "workspace_id": "workspace-uuid",
+  "channel_id": "resource-uuid"
+}
+```
+</CodeGroup>
+
+<Tip>
+  Always sync messages immediately before running an analysis for the same date range. Messages posted after the last sync will not appear in the LLM results even if they fall within the requested date window.
+</Tip>
+
+## Run Analysis
+
+Submit an analysis request to have the LLM generate insights for the synced messages.
+
+```text
+POST /api/v1/integrations/{integration_id}/resources/{resource_id}/analyze
+```
+
+**Request body (JSON):**
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `start_date` | ISO 8601 datetime | No | Start of the analysis window (defaults to 30 days ago) |
+| `end_date` | ISO 8601 datetime | No | End of the analysis window (defaults to now) |
+| `include_threads` | boolean | No | Include thread reply content in the prompt (default: `true`) |
+| `include_reactions` | boolean | No | Include reaction counts in contributor scoring (default: `true`) |
+| `model` | string | No | OpenRouter model identifier. Defaults to `OPENROUTER_DEFAULT_MODEL` |
+
+<CodeGroup>
+```bash curl
+curl -X POST \
+  "https://api.example.com/api/v1/integrations/integration-uuid/resources/resource-uuid/analyze" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "start_date": "2024-01-01T00:00:00Z",
+    "end_date": "2024-01-31T23:59:59Z",
+    "include_threads": true,
+    "include_reactions": true,
+    "model": "anthropic/claude-3-sonnet:20240229"
+  }'
+```
+
+```json Response
+{
+  "analysis_id": "550e8400-e29b-41d4-a716-446655440000",
+  "channel_id": "resource-uuid",
+  "channel_name": "engineering",
+  "period": {
+    "start": "2024-01-01T00:00:00Z",
+    "end": "2024-01-31T23:59:59Z"
+  },
+  "stats": {
+    "message_count": 412,
+    "participant_count": 18,
+    "thread_count": 54,
+    "reaction_count": 203
+  },
+  "channel_summary": "The #engineering channel serves as the primary hub for...",
+  "topic_analysis": "1. API Redesign: The team spent significant time this month...",
+  "contributor_insights": "1. Alex (@alex) was the most active knowledge sharer...",
+  "key_highlights": "1. The January 15th discussion about the new deployment pipeline...",
+  "model_used": "anthropic/claude-3-sonnet:20240229",
+  "generated_at": "2024-02-01T09:14:33Z",
+  "report_id": "660e8400-e29b-41d4-a716-446655440111",
+  "team_id": "team-uuid",
+  "is_unified_report": true
+}
+```
+</CodeGroup>
+
+<Note>
+  For channels with very high message volume, Toban applies intelligent sampling to stay within LLM token limits. Use narrower date ranges for faster, more focused results.
+</Note>
+
+## Reading Analysis Results
+
+The `AnalysisResponse` contains four prose sections generated by the LLM plus a statistics block:
+
+| Field | Description |
+|---|---|
+| `channel_summary` | Narrative overview of the channel's purpose, activity level, and communication style during the period |
+| `topic_analysis` | Numbered list of the main discussion topics, with representative examples and context |
+| `contributor_insights` | Highlights of key contributors, their participation patterns, and the types of value they add (problem-solving, knowledge sharing, coordination) |
+| `key_highlights` | Notable individual threads, decisions, or moments that stood out during the period |
+| `stats.message_count` | Total number of messages analyzed (excluding any that were sampled out) |
+| `stats.participant_count` | Unique users who sent at least one message |
+| `stats.thread_count` | Number of distinct thread parent messages |
+| `stats.reaction_count` | Total emoji reactions across all analyzed messages |
+| `model_used` | The exact OpenRouter model string used for this run |
+| `generated_at` | UTC timestamp of when the analysis was produced |
+
+The response also includes `report_id` and `team_id`, which link this single-channel analysis to the underlying `CrossResourceReport` and `ResourceAnalysis` records in the database.
+
+## Retrieve Stored Analyses
+
+Every successful analysis is stored in the database. You can retrieve past results without re-running the LLM.
+
+**List all analyses for a channel** (paginated, ordered most-recent first):
+
+```text
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses
+```
+
+Query parameters: `limit` (1–100, default 10), `offset` (default 0).
+
+**Get the most recent analysis:**
+
+```text
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analyses/latest
+```
+
+Returns `null` if no analysis has been run yet for this resource.
+
+**Get a specific analysis by ID:**
+
+```text
+GET /api/v1/integrations/{integration_id}/resources/{resource_id}/analysis/{analysis_id}
+```
+
+<CodeGroup>
+```bash List analyses
+curl "https://api.example.com/api/v1/integrations/integration-uuid/resources/resource-uuid/analyses?limit=5" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+```bash Latest analysis
+curl "https://api.example.com/api/v1/integrations/integration-uuid/resources/resource-uuid/analyses/latest" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+</CodeGroup>
+
+The stored analysis response (`StoredAnalysisResponse`) mirrors the fields in `AnalysisResponse` and additionally includes `workspace_id` for display purposes.

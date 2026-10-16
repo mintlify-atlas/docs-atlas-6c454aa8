@@ -1,0 +1,331 @@
+---
+title: "Environment Variables Reference for Toban"
+sidebarTitle: "Environment Variables"
+description: "Complete reference for all backend, frontend, and Docker environment variables required to run Toban Contribution Viewer in development and production."
+---
+
+Toban Contribution Viewer uses three separate environment files depending on how you run the application. `backend/.env` configures the FastAPI server directly — used when running the backend outside of Docker. `frontend/.env` configures the Vite build and the React application. `.env.docker` is the single file loaded by Docker Compose and supplies values to both the backend and frontend containers at once. In all cases, copy the corresponding `.example` file, fill in your real values, and never commit secrets to version control.
+
+<Warning>
+  Never commit `.env`, `backend/.env`, `frontend/.env`, or `.env.docker` to version control. All three files are listed in `.gitignore` by default. Use your CI/CD secrets store (e.g., GitHub Actions Secrets) for production values.
+</Warning>
+
+## Backend Environment Variables
+
+These variables are read by `backend/app/config.py` via Pydantic `BaseSettings`. Copy `backend/.env.example` to `backend/.env` and fill in each value before starting the server.
+
+### Database
+
+<ParamField path="DATABASE_URL" type="string" required>
+  Full PostgreSQL connection string used by SQLAlchemy and Alembic. Must be a valid `postgresql://` DSN.
+
+  ```
+  DATABASE_URL=postgresql://toban_admin:postgres@localhost/tobancv
+  ```
+</ParamField>
+
+### Supabase Authentication
+
+<ParamField path="SUPABASE_URL" type="string" required>
+  The base URL of your Supabase project, found in **Project Settings → API**.
+
+  ```
+  SUPABASE_URL=https://xyzcompany.supabase.co
+  ```
+</ParamField>
+
+<ParamField path="SUPABASE_KEY" type="string" required>
+  Your Supabase **service role** key. This key has elevated privileges and should never be exposed to the browser.
+
+  ```
+  SUPABASE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+</ParamField>
+
+<ParamField path="SUPABASE_JWT_SECRET" type="string" required>
+  The JWT signing secret used to verify tokens issued by Supabase Auth. Found in **Project Settings → API → JWT Settings**.
+
+  ```
+  SUPABASE_JWT_SECRET=super-secret-jwt-token-with-at-least-32-characters-long
+  ```
+</ParamField>
+
+### OpenRouter LLM
+
+<ParamField path="OPENROUTER_API_KEY" type="string" required>
+  API key for [OpenRouter](https://openrouter.ai), used by the contribution-insights engine to call LLMs.
+
+  ```
+  OPENROUTER_API_KEY=sk-or-v1-...
+  ```
+</ParamField>
+
+<ParamField path="OPENROUTER_DEFAULT_MODEL" type="string" default="anthropic/claude-3-sonnet:20240229">
+  OpenRouter model identifier to use when generating contribution insights. Can be any model available on OpenRouter.
+
+  ```
+  OPENROUTER_DEFAULT_MODEL=anthropic/claude-3-sonnet:20240229
+  ```
+</ParamField>
+
+<ParamField path="OPENROUTER_MAX_TOKENS" type="integer" default="4000">
+  Maximum number of tokens the model may generate per request.
+
+  ```
+  OPENROUTER_MAX_TOKENS=4000
+  ```
+</ParamField>
+
+<ParamField path="OPENROUTER_TEMPERATURE" type="float" default="0.7">
+  Sampling temperature passed to the model. Lower values produce more deterministic output; higher values produce more creative output.
+
+  ```
+  OPENROUTER_TEMPERATURE=0.7
+  ```
+</ParamField>
+
+### URL Configuration
+
+<ParamField path="API_URL" type="string">
+  Base URL of the backend API. Used to construct OAuth callback URLs (e.g., the Slack redirect URI). In local development with Docker, set this to your ngrok HTTPS URL so that Slack's OAuth flow can reach the container. In production, set it to your Elastic Beanstalk domain.
+
+  ```
+  API_URL=https://your-ngrok-domain.ngrok-free.app
+  ```
+</ParamField>
+
+<ParamField path="FRONTEND_URL" type="string">
+  Base URL of the React frontend. Used to redirect users back to the UI after OAuth flows complete.
+
+  ```
+  FRONTEND_URL=https://app.example.com
+  ```
+</ParamField>
+
+### CORS
+
+<ParamField path="ALLOWED_HOSTS" type="list[string]">
+  List of origins allowed by the CORS middleware. Defaults to `http://localhost:5173` and `http://localhost:8000`. Provide additional origins via `ADDITIONAL_CORS_ORIGINS` or `NGROK_URL` — the `config.py` validator merges them automatically.
+
+  ```
+  # Managed automatically; see ADDITIONAL_CORS_ORIGINS and NGROK_URL below
+  ```
+</ParamField>
+
+<ParamField path="ADDITIONAL_CORS_ORIGINS" type="string">
+  Comma-separated list of extra origins to append to `ALLOWED_HOSTS`. Useful in staging environments where multiple preview URLs need access.
+
+  ```
+  ADDITIONAL_CORS_ORIGINS=https://preview.example.com,https://staging.example.com
+  ```
+</ParamField>
+
+<ParamField path="NGROK_URL" type="string">
+  Full HTTPS URL of your ngrok tunnel (e.g., `https://your-domain.ngrok-free.app`). When set, this URL is automatically added to `ALLOWED_HOSTS` and used as the `API_URL` and `FRONTEND_URL` in Docker Compose. Leave unset in production.
+
+  ```
+  NGROK_URL=https://your-domain.ngrok-free.app
+  ```
+</ParamField>
+
+### Feature Flags
+
+<ParamField path="ENABLE_SLACK_INTEGRATION" type="boolean" default="True">
+  Enables the Slack OAuth flow and message-sync background tasks. Set to `False` to disable all Slack-related routes and background workers.
+
+  ```
+  ENABLE_SLACK_INTEGRATION=True
+  ```
+</ParamField>
+
+<ParamField path="ENABLE_GITHUB_INTEGRATION" type="boolean" default="True">
+  Enables GitHub OAuth routes. Requires `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` to be set.
+
+  ```
+  ENABLE_GITHUB_INTEGRATION=True
+  ```
+</ParamField>
+
+<ParamField path="ENABLE_NOTION_INTEGRATION" type="boolean" default="True">
+  Enables the Notion integration routes. Requires `NOTION_API_KEY` to be set.
+
+  ```
+  ENABLE_NOTION_INTEGRATION=True
+  ```
+</ParamField>
+
+### Logging
+
+<ParamField path="DEBUG" type="boolean" default="False">
+  When `True`, the FastAPI interactive docs (`/docs`) are enabled and additional debug output is produced. Set to `False` in production.
+
+  ```
+  DEBUG=True
+  ```
+</ParamField>
+
+<ParamField path="LOG_LEVEL" type="string" default="INFO">
+  Python logging level for the application. Accepted values: `DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`.
+
+  ```
+  LOG_LEVEL=INFO
+  ```
+</ParamField>
+
+### Optional Integrations
+
+<ParamField path="GITHUB_CLIENT_ID" type="string">
+  OAuth App Client ID from your GitHub Developer settings. Required only when `ENABLE_GITHUB_INTEGRATION=True`.
+
+  ```
+  GITHUB_CLIENT_ID=Iv1.abc123def456
+  ```
+</ParamField>
+
+<ParamField path="GITHUB_CLIENT_SECRET" type="string">
+  OAuth App Client Secret from your GitHub Developer settings. Required only when `ENABLE_GITHUB_INTEGRATION=True`.
+
+  ```
+  GITHUB_CLIENT_SECRET=ghsec_...
+  ```
+</ParamField>
+
+<ParamField path="NOTION_API_KEY" type="string">
+  Internal Integration Token from your Notion integration settings page. Required only when `ENABLE_NOTION_INTEGRATION=True`.
+
+  ```
+  NOTION_API_KEY=secret_...
+  ```
+</ParamField>
+
+<Note>
+  **Slack credentials are not environment variables.** Unlike GitHub and Notion, your Slack App Client ID and Client Secret are entered directly in the Toban UI after you log in — they are stored in the database per workspace. You do not need to set any `SLACK_CLIENT_ID` or `SLACK_CLIENT_SECRET` variables in your `.env` file.
+</Note>
+
+---
+
+## Frontend Environment Variables
+
+These variables are consumed by Vite at build time and at runtime in the browser. Copy `frontend/.env.example` to `frontend/.env`.
+
+<ParamField path="VITE_API_URL" type="string" required>
+  Full URL (including `/api/v1`) of the backend API that the React app will call from the browser.
+
+  ```
+  VITE_API_URL=http://localhost:8000/api/v1
+  ```
+
+  In production, set this to your Elastic Beanstalk environment URL or custom API domain, e.g. `https://api.example.com/api/v1`.
+</ParamField>
+
+<ParamField path="VITE_SUPABASE_URL" type="string" required>
+  The base URL of your Supabase project — the same value as the backend's `SUPABASE_URL`.
+
+  ```
+  VITE_SUPABASE_URL=https://xyzcompany.supabase.co
+  ```
+</ParamField>
+
+<ParamField path="VITE_SUPABASE_ANON_KEY" type="string" required>
+  The **anon/public** key for your Supabase project. This is safe to expose in the browser. Found in **Project Settings → API**.
+
+  ```
+  VITE_SUPABASE_ANON_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+  ```
+</ParamField>
+
+<ParamField path="VITE_AUTH_REDIRECT_URI" type="string" default="http://localhost:5173/auth/callback">
+  The URI that Supabase Auth will redirect to after a successful sign-in. Must be added to your Supabase project's **Redirect URLs** allowlist.
+
+  ```
+  VITE_AUTH_REDIRECT_URI=http://localhost:5173/auth/callback
+  ```
+</ParamField>
+
+<ParamField path="VITE_DEV_MODE" type="boolean" default="false">
+  When `true`, enables additional development-only UI features and verbose client-side logging.
+
+  ```
+  VITE_DEV_MODE=true
+  ```
+</ParamField>
+
+<ParamField path="VITE_ENABLE_SLACK_INTEGRATION" type="boolean" default="true">
+  Controls whether Slack-related UI elements (connect workspace, channel sync) are rendered.
+
+  ```
+  VITE_ENABLE_SLACK_INTEGRATION=true
+  ```
+</ParamField>
+
+<ParamField path="VITE_ENABLE_GITHUB_INTEGRATION" type="boolean" default="true">
+  Controls whether GitHub-related UI elements are rendered.
+
+  ```
+  VITE_ENABLE_GITHUB_INTEGRATION=true
+  ```
+</ParamField>
+
+<ParamField path="VITE_ENABLE_NOTION_INTEGRATION" type="boolean" default="true">
+  Controls whether Notion-related UI elements are rendered.
+
+  ```
+  VITE_ENABLE_NOTION_INTEGRATION=true
+  ```
+</ParamField>
+
+---
+
+## Docker Compose Environment File
+
+When running the full stack with Docker Compose, both the backend and frontend containers read from a single `.env.docker` file. Copy `.env.docker.example` to `.env.docker` and always start the stack with the explicit `--env-file` flag:
+
+```bash
+docker compose --env-file .env.docker up -d
+```
+
+Or use the provided helper script:
+
+```bash
+./docker-dev.sh start
+```
+
+### PostgreSQL Container
+
+These variables are consumed directly by the `postgres:13` Docker image to initialise the database on first run.
+
+<ParamField path="POSTGRES_USER" type="string" default="toban_admin">
+  Username for the PostgreSQL superuser created at container initialisation.
+
+  ```
+  POSTGRES_USER=toban_admin
+  ```
+</ParamField>
+
+<ParamField path="POSTGRES_PASSWORD" type="string" default="postgres">
+  Password for the PostgreSQL superuser. Change this for any environment beyond a local laptop.
+
+  ```
+  POSTGRES_PASSWORD=postgres
+  ```
+</ParamField>
+
+<ParamField path="POSTGRES_DB" type="string" default="tobancv">
+  Name of the default database created at container initialisation.
+
+  ```
+  POSTGRES_DB=tobancv
+  ```
+</ParamField>
+
+### Backend Container (via `.env.docker`)
+
+The Docker Compose file injects `.env.docker` into the backend container as an `env_file`, then overrides `DATABASE_URL` to point at the internal `postgres` service hostname. Provide `SUPABASE_URL`, `SUPABASE_KEY`, `SUPABASE_JWT_SECRET`, `SUPABASE_ANON_KEY`, and `OPENROUTER_API_KEY` in `.env.docker`; the Compose file constructs `DATABASE_URL` automatically from the `POSTGRES_*` variables.
+
+### Frontend Container (via `.env.docker`)
+
+`VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` are sourced from `SUPABASE_URL` and `SUPABASE_ANON_KEY` in `.env.docker`. Set `NGROK_URL` in `.env.docker` if you need the frontend to be reachable from an external device or for Slack OAuth — it is automatically propagated to `VITE_FRONTEND_URL` and `VITE_AUTH_REDIRECT_URI`.
+
+<Tip>
+  The `NGROK_URL` variable in `.env.docker` is the single source of truth for tunnelled development. When set, Docker Compose automatically injects it into `API_URL`, `FRONTEND_URL`, `ADDITIONAL_CORS_ORIGINS` (backend), and `VITE_FRONTEND_URL`, `VITE_AUTH_REDIRECT_URI` (frontend) — you only need to set it in one place.
+</Tip>

@@ -1,0 +1,273 @@
+---
+title: "Integrations API — Connect and Manage External Services"
+sidebarTitle: "Integrations"
+description: "REST endpoints to list, create, update, and share integrations between teams. Supports Slack with a dedicated OAuth endpoint."
+---
+
+Integrations represent connections to external services — currently Slack, with GitHub, Notion, and Discord supported in the schema. Each integration is owned by a team and can optionally be shared with other teams at configurable permission levels. The Slack integration uses an OAuth flow to obtain and store access tokens securely; credential values are never returned in API responses by default.
+
+---
+
+## List integrations
+
+<ParamField query="team_id" type="uuid" required>
+  The UUID of the team whose integrations you want to list. The authenticated user must be a member of this team.
+</ParamField>
+
+<ParamField query="service_type" type="string">
+  Filter by service type. One of: `slack`, `github`, `notion`, `discord`.
+</ParamField>
+
+<ParamField query="include_shared" type="boolean" default="true">
+  When `true`, integrations shared with this team by other teams are included in the results alongside owned integrations.
+</ParamField>
+
+<ParamField query="include_resources" type="boolean" default="true">
+  When `true`, the `resources` array (channels, users, etc.) is populated in each integration response.
+</ParamField>
+
+<ParamField query="include_details" type="boolean" default="true">
+  When `true`, the `shared_with` array is populated with sharing metadata.
+</ParamField>
+
+<ParamField query="include_credentials" type="boolean" default="false">
+  When `true`, the `credentials` array is included. Credential `encrypted_value` and `refresh_token` fields are **never** returned regardless of this setting.
+</ParamField>
+
+```http
+GET /api/v1/integrations?team_id={team_id}
+```
+
+Returns an array of `IntegrationResponse` objects.
+
+<Expandable title="IntegrationResponse schema">
+  <ResponseField name="id" type="uuid">Unique identifier for the integration.</ResponseField>
+  <ResponseField name="name" type="string">Display name of the integration.</ResponseField>
+  <ResponseField name="description" type="string | null">Optional human-readable description.</ResponseField>
+  <ResponseField name="service_type" type="string">The external service. One of: `slack`, `github`, `notion`, `discord`.</ResponseField>
+  <ResponseField name="status" type="string">Connection status. One of: `active`, `disconnected`, `expired`, `revoked`, `error`.</ResponseField>
+  <ResponseField name="metadata" type="object">Service-specific configuration. Sensitive keys (tokens, secrets) are stripped before returning.</ResponseField>
+  <ResponseField name="last_used_at" type="datetime | null">ISO 8601 timestamp of when the integration was last used.</ResponseField>
+  <ResponseField name="owner_team" type="object">
+    The team that owns this integration.
+    <Expandable title="TeamInfo">
+      <ResponseField name="id" type="uuid">Team UUID.</ResponseField>
+      <ResponseField name="name" type="string">Team display name.</ResponseField>
+      <ResponseField name="slug" type="string">URL-safe team identifier.</ResponseField>
+    </Expandable>
+  </ResponseField>
+  <ResponseField name="created_by" type="object">
+    The user who created the integration.
+    <Expandable title="UserInfo">
+      <ResponseField name="id" type="string">User identifier.</ResponseField>
+    </Expandable>
+  </ResponseField>
+  <ResponseField name="credentials" type="array">
+    List of credential metadata objects. Only present when `include_credentials=true`. Raw token values are never included.
+  </ResponseField>
+  <ResponseField name="resources" type="array">
+    List of `ServiceResourceResponse` objects (channels, users). Only present when `include_resources=true`.
+  </ResponseField>
+  <ResponseField name="shared_with" type="array">
+    List of `IntegrationShareResponse` objects. Only present when `include_details=true`.
+  </ResponseField>
+  <ResponseField name="updated" type="boolean">Flag indicating whether this response reflects an update to an existing record (relevant after OAuth reconnection).</ResponseField>
+</Expandable>
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/integrations?team_id=018e1234-abcd-7000-8000-000000000001" \
+  -H "Authorization: Bearer <token>"
+```
+</CodeGroup>
+
+---
+
+## Create an integration
+
+Creates a generic integration record without OAuth. Use the [Slack-specific endpoint](#create-slack-integration-oauth) for Slack.
+
+```http
+POST /api/v1/integrations
+```
+
+<ParamField body="name" type="string" required>
+  A display name for the integration (e.g. `"My GitHub Org"`).
+</ParamField>
+
+<ParamField body="service_type" type="string" required>
+  The external service. One of: `slack`, `github`, `notion`, `discord`.
+</ParamField>
+
+<ParamField body="team_id" type="uuid" required>
+  UUID of the team that will own this integration. Requires `admin` permission.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description of this integration.
+</ParamField>
+
+<ParamField body="workspace_id" type="string">
+  External workspace identifier used to enforce uniqueness. If another integration with the same `(team_id, workspace_id, service_type)` combination already exists, a conflict error is returned.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Arbitrary JSON for service-specific configuration.
+</ParamField>
+
+Returns `201 Created` with an `IntegrationResponse`.
+
+---
+
+## Create Slack integration (OAuth)
+
+Completes the Slack OAuth flow and stores the resulting access token. If an integration for the same Slack workspace already exists for this team, the existing record is updated rather than creating a duplicate.
+
+```http
+POST /api/v1/integrations/slack
+```
+
+<ParamField body="name" type="string" required>
+  Display name for this Slack integration.
+</ParamField>
+
+<ParamField body="team_id" type="uuid" required>
+  UUID of the owning team. Requires `admin` permission.
+</ParamField>
+
+<ParamField body="code" type="string" required>
+  The OAuth authorization code returned by Slack's OAuth redirect.
+</ParamField>
+
+<ParamField body="redirect_uri" type="string" required>
+  The redirect URI that was registered with Slack and used during the OAuth flow.
+</ParamField>
+
+<ParamField body="client_id" type="string" required>
+  Your Slack app's Client ID.
+</ParamField>
+
+<ParamField body="client_secret" type="string" required>
+  Your Slack app's Client Secret.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Optional description.
+</ParamField>
+
+Returns `201 Created` for new integrations or `200 OK` for updates. The response is an `IntegrationResponse` with an additional `updated` flag:
+
+- **`updated: false`** — a new integration was created.
+- **`updated: true`** — an existing integration for the same Slack workspace was reconnected and its credentials refreshed.
+
+<Note>
+  This endpoint deduplicates by Slack workspace ID (`workspace_id` extracted from the OAuth token response). If your team already has an integration for workspace `T01234ABCD` and you complete the OAuth flow again, the API updates the existing integration's credentials instead of creating a second record. This is useful for token rotation or reconnecting after a revocation.
+</Note>
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.example.com/api/v1/integrations/slack" \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Engineering Slack",
+    "team_id": "018e1234-abcd-7000-8000-000000000001",
+    "code": "4/P7q7W91a-oMsCeLvIaQm6bTrgtp7",
+    "redirect_uri": "https://app.example.com/oauth/callback",
+    "client_id": "123456789012.123456789012",
+    "client_secret": "abcdef1234567890abcdef1234567890",
+    "description": "Primary workspace for the engineering team"
+  }'
+```
+</CodeGroup>
+
+---
+
+## Get an integration
+
+```http
+GET /api/v1/integrations/{integration_id}
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the integration to retrieve.
+</ParamField>
+
+Accepts the same `include_credentials`, `include_resources`, and `include_details` query parameters as the list endpoint. Returns a single `IntegrationResponse`.
+
+---
+
+## Update an integration
+
+```http
+PUT /api/v1/integrations/{integration_id}
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the integration to update. Requires `admin` permission on the owner team.
+</ParamField>
+
+<ParamField body="name" type="string">
+  New display name.
+</ParamField>
+
+<ParamField body="description" type="string">
+  New description.
+</ParamField>
+
+<ParamField body="status" type="string">
+  Override the connection status. One of: `active`, `disconnected`, `expired`, `revoked`, `error`.
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Merged metadata. Existing keys not present in this object are preserved.
+</ParamField>
+
+Returns the updated `IntegrationResponse`.
+
+---
+
+## Share an integration
+
+Grant another team access to use this integration.
+
+```http
+POST /api/v1/integrations/{integration_id}/share
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the integration to share. Requires `admin` permission on both the owner team and the target team.
+</ParamField>
+
+<ParamField body="team_id" type="uuid" required>
+  UUID of the team to share this integration with.
+</ParamField>
+
+<ParamField body="share_level" type="string" required>
+  Permission level for the share. One of:
+  - `full_access` — can use all integration functionality
+  - `limited_access` — can use a restricted subset of functionality
+  - `read_only` — can only view resources; cannot trigger syncs or analyses
+</ParamField>
+
+Returns an `IntegrationShareResponse` containing the share `id`, `status`, the target `team` info, and `shared_by` user info.
+
+---
+
+## Revoke a share
+
+Remove a team's access to a shared integration.
+
+```http
+DELETE /api/v1/integrations/{integration_id}/share/{team_id}
+```
+
+<ParamField path="integration_id" type="uuid" required>
+  UUID of the integration.
+</ParamField>
+
+<ParamField path="team_id" type="uuid" required>
+  UUID of the team whose access should be revoked. The caller must have `admin` permission on either the owner team or the target team.
+</ParamField>
+
+Returns `200 OK` with `{"status": "success", "message": "Share revoked successfully"}`.

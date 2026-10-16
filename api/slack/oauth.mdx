@@ -1,0 +1,146 @@
+---
+title: "Slack OAuth Endpoints — Connect Workspaces"
+sidebarTitle: "OAuth"
+description: "REST endpoints to initiate Slack OAuth, exchange authorization codes for tokens, and manage connected workspace credentials."
+---
+
+Connecting a Slack workspace to Toban follows a standard two-step OAuth 2.0 flow. First, the frontend calls the **oauth-url** endpoint to generate an authorization link and redirects the user to Slack's consent screen. After the user approves, Slack redirects back to the frontend with a short-lived authorization code, which the frontend immediately exchanges via the **oauth-callback** endpoint. On success, the callback persists the workspace record and returns a bot access token along with workspace metadata that the frontend uses to create a Toban integration.
+
+<Warning>
+  Toban does **not** store your Slack app credentials (client ID and client secret) as server-side environment variables. Both values must be supplied by the frontend on every request. Never expose your client secret in client-side JavaScript; pass it only through a server-side proxy or a trusted backend call.
+</Warning>
+
+---
+
+## GET /api/v1/slack/oauth-url
+
+Generates a Slack OAuth authorization URL that the frontend should redirect the user to. The URL requests the exact set of bot-token scopes Toban needs for analysis.
+
+**Scopes requested:**
+
+| Scope | Purpose |
+|---|---|
+| `channels:history` | Read messages from public channels |
+| `channels:read` | List public channels |
+| `groups:history` | Read messages from private channels the bot joins |
+| `groups:read` | List private channels |
+| `reactions:read` | Read emoji reactions on messages |
+| `users:read` | Look up workspace member information |
+| `users.profile:read` | Read extended user profile fields |
+| `team:read` | Retrieve workspace name, domain, and icon |
+
+### Query Parameters
+
+<ParamField query="client_id" type="string" required>
+  Your Slack app's Client ID. Obtain this from the **Basic Information** page of your Slack app settings. This value is embedded in the generated authorization URL.
+</ParamField>
+
+<ParamField query="client_secret" type="string">
+  Your Slack app's Client Secret. Accepted here for parity with the callback endpoint but is not used when constructing the OAuth URL itself. Pass it along so your frontend flow has it available for the next step.
+</ParamField>
+
+### Response
+
+```json
+{
+  "url": "https://slack.com/oauth/v2/authorize?client_id=...&scope=channels%3Ahistory%2C..."
+}
+```
+
+The `url` value is a fully-formed `https://slack.com/oauth/v2/authorize` URL. Redirect the user there to begin authorization.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -G "https://api.example.com/api/v1/slack/oauth-url" \
+  --data-urlencode "client_id=1234567890.abcdefghij"
+```
+
+```json Response
+{
+  "url": "https://slack.com/oauth/v2/authorize?client_id=1234567890.abcdefghij&scope=channels%3Ahistory%2Cchannels%3Aread%2Cgroups%3Ahistory%2Cgroups%3Aread%2Creactions%3Aread%2Cusers%3Aread%2Cusers.profile%3Aread%2Cteam%3Aread&user_scope=&redirect_uri=https%3A%2F%2Fapp.example.com%2Fauth%2Fslack%2Fcallback"
+}
+```
+</CodeGroup>
+
+---
+
+## GET /api/v1/slack/oauth-callback
+
+Exchanges the authorization code that Slack returned to the frontend redirect URI for a bot access token. The endpoint also creates or updates the `SlackWorkspace` record in Toban's database and triggers a background task to fetch additional workspace metadata (icon, team size, etc.).
+
+### Query Parameters
+
+<ParamField query="code" type="string" required>
+  The short-lived authorization code provided by Slack in the redirect URL query string. Codes expire quickly — exchange this immediately.
+</ParamField>
+
+<ParamField query="client_id" type="string" required>
+  Your Slack app's Client ID. Must match the value used when generating the OAuth URL.
+</ParamField>
+
+<ParamField query="client_secret" type="string" required>
+  Your Slack app's Client Secret. Required to exchange the authorization code for a token via `https://slack.com/api/oauth.v2.access`.
+</ParamField>
+
+<ParamField query="state" type="string">
+  Optional CSRF state token that was included in the original authorization URL. Not currently validated server-side but can be used by the frontend to prevent CSRF attacks.
+</ParamField>
+
+<ParamField query="error" type="string">
+  If Slack redirected back with an error (e.g., the user denied access), pass the error value here. The endpoint will respond with HTTP 400 and a descriptive message.
+</ParamField>
+
+<ParamField query="redirect_from_frontend" type="boolean">
+  Set to `true` when the frontend is forwarding the callback parameters it received from Slack. Defaults to `false`.
+</ParamField>
+
+### Response
+
+On success the endpoint returns HTTP 200 with a JSON body containing the access token and workspace identifiers. Pass these values to `POST /api/v1/integrations/slack` to finish creating the Toban integration.
+
+```json
+{
+  "status": "success",
+  "message": "Connected to Acme Corp",
+  "access_token": "xoxb-...",
+  "workspace_id": "T01ABC123",
+  "workspace_name": "Acme Corp",
+  "workspace_domain": "acme",
+  "bot_user_id": "U01XYZ789",
+  "scope": "channels:history,channels:read,groups:history,groups:read,reactions:read,users:read,users.profile:read,team:read"
+}
+```
+
+<Expandable title="Error responses">
+| HTTP Status | Condition |
+|---|---|
+| 400 | `code`, `client_id`, or `client_secret` missing; Slack returned `invalid_code`; user denied access |
+| 500 | Network error reaching the Slack API or unexpected server error |
+</Expandable>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -G "https://api.example.com/api/v1/slack/oauth-callback" \
+  --data-urlencode "code=abc123xyz" \
+  --data-urlencode "client_id=1234567890.abcdefghij" \
+  --data-urlencode "client_secret=s3cr3t_v4lue" \
+  --data-urlencode "redirect_from_frontend=true"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Connected to Acme Corp",
+  "access_token": "xoxb-1234567890-abcdef",
+  "workspace_id": "T01ABC123",
+  "workspace_name": "Acme Corp",
+  "workspace_domain": "acme",
+  "bot_user_id": "U01XYZ789",
+  "scope": "channels:history,channels:read,groups:history,groups:read,reactions:read,users:read,users.profile:read,team:read"
+}
+```
+</CodeGroup>

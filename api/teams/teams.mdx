@@ -1,0 +1,434 @@
+---
+title: "Teams API — Create and Manage Toban Teams"
+sidebarTitle: "Teams"
+description: "REST endpoints to list, create, retrieve, update, and delete teams. All endpoints require authentication; creation and deletion require elevated permissions."
+---
+
+Teams are the top-level organizational unit in Toban Contribution Viewer. Every integration, report, and member belongs to a team. A team can represent a company, a department, or a personal workspace — the `is_personal` flag distinguishes personal teams from shared ones. All endpoints below sit under the `/api/v1/teams` prefix and require a valid bearer token in the `Authorization` header.
+
+---
+
+## List teams
+
+Returns every team the authenticated user belongs to as an active member.
+
+```
+GET /api/v1/teams/
+```
+
+### Query parameters
+
+<ParamField query="include_members" type="boolean" default="false">
+  When `true`, each team object in the response will include a populated `members` array. Omit or set to `false` to keep responses lightweight.
+</ParamField>
+
+### Response
+
+A JSON array of `TeamResponse` objects.
+
+<ResponseField name="id" type="uuid" required>
+  Unique identifier for the team.
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Human-readable team name (max 255 characters).
+</ResponseField>
+
+<ResponseField name="slug" type="string" required>
+  URL-safe unique identifier derived from the team name (max 255 characters). Used in URL lookups.
+</ResponseField>
+
+<ResponseField name="description" type="string | null">
+  Optional free-text description of the team.
+</ResponseField>
+
+<ResponseField name="avatar_url" type="string | null">
+  URL pointing to the team's avatar or logo image.
+</ResponseField>
+
+<ResponseField name="is_personal" type="boolean" required>
+  `true` if this is the user's personal team; `false` for shared / org teams.
+</ResponseField>
+
+<ResponseField name="created_by_user_id" type="string" required>
+  User ID of the person who created the team.
+</ResponseField>
+
+<ResponseField name="created_by_email" type="string | null">
+  Email address of the team creator.
+</ResponseField>
+
+<ResponseField name="team_size" type="integer" required>
+  Count of active members in the team.
+</ResponseField>
+
+<ResponseField name="created_at" type="datetime" required>
+  ISO 8601 timestamp when the team was created.
+</ResponseField>
+
+<ResponseField name="updated_at" type="datetime" required>
+  ISO 8601 timestamp of the last update.
+</ResponseField>
+
+<ResponseField name="members" type="array | null">
+  List of `TeamMemberResponse` objects. Populated only when `include_members=true` is passed.
+
+  <Expandable title="Member object fields">
+    <ResponseField name="id" type="uuid">Unique member record ID.</ResponseField>
+    <ResponseField name="team_id" type="uuid">ID of the team this record belongs to.</ResponseField>
+    <ResponseField name="user_id" type="string">User ID of the member.</ResponseField>
+    <ResponseField name="email" type="string | null">Member's email address.</ResponseField>
+    <ResponseField name="display_name" type="string | null">Member's display name.</ResponseField>
+    <ResponseField name="role" type="string">Role within the team: `owner`, `admin`, `member`, or `viewer`.</ResponseField>
+    <ResponseField name="invitation_status" type="string">Status of the member's invitation: `active`, `pending`, `expired`, or `inactive`.</ResponseField>
+    <ResponseField name="created_at" type="datetime">When the member was added.</ResponseField>
+    <ResponseField name="last_active_at" type="datetime | null">Timestamp of the member's last recorded activity.</ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.toban.io/api/v1/teams/?include_members=true" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+[
+  {
+    "id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+    "name": "Acme Engineering",
+    "slug": "acme-engineering",
+    "description": "Core engineering team for Acme Corp.",
+    "avatar_url": "https://cdn.toban.io/avatars/acme-eng.png",
+    "is_personal": false,
+    "created_by_user_id": "usr_abc123",
+    "created_by_email": "alice@acme.io",
+    "team_size": 3,
+    "created_at": "2024-03-01T09:00:00Z",
+    "updated_at": "2024-06-15T14:22:00Z",
+    "members": [
+      {
+        "id": "018e2f3b-0001-7d4e-9f0a-bc1234567891",
+        "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+        "user_id": "usr_abc123",
+        "email": "alice@acme.io",
+        "display_name": "Alice",
+        "role": "owner",
+        "invitation_status": "active",
+        "created_at": "2024-03-01T09:00:00Z",
+        "last_active_at": "2024-06-20T08:45:00Z"
+      }
+    ]
+  }
+]
+```
+</CodeGroup>
+
+---
+
+## Create a team
+
+Creates a new team and automatically adds the authenticated user as its first `owner`.
+
+```
+POST /api/v1/teams/
+```
+
+### Request body
+
+<ParamField body="name" type="string" required>
+  The team's display name (max 255 characters).
+</ParamField>
+
+<ParamField body="slug" type="string">
+  A URL-safe identifier for the team (max 255 characters). If omitted, one is automatically generated from `name`.
+</ParamField>
+
+<ParamField body="description" type="string">
+  An optional description of the team's purpose.
+</ParamField>
+
+<ParamField body="avatar_url" type="string">
+  URL to the team's avatar or logo.
+</ParamField>
+
+<ParamField body="is_personal" type="boolean" default="false">
+  Set to `true` to mark this as a personal workspace team.
+</ParamField>
+
+<ParamField body="team_metadata" type="object">
+  Arbitrary key-value metadata stored as JSONB. Use this to attach custom attributes to your team.
+</ParamField>
+
+### Response
+
+Returns the newly created `TeamResponse` object (HTTP `201 Created`). The `members` array is populated with the creator as the initial `owner`.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X POST "https://api.toban.io/api/v1/teams/" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Acme Engineering",
+    "description": "Core engineering team for Acme Corp.",
+    "is_personal": false
+  }'
+```
+
+```json Response
+{
+  "id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "name": "Acme Engineering",
+  "slug": "acme-engineering",
+  "description": "Core engineering team for Acme Corp.",
+  "avatar_url": null,
+  "is_personal": false,
+  "created_by_user_id": "usr_abc123",
+  "created_by_email": "alice@acme.io",
+  "team_size": 1,
+  "created_at": "2024-06-20T10:30:00Z",
+  "updated_at": "2024-06-20T10:30:00Z",
+  "members": [
+    {
+      "id": "018e2f3b-0001-7d4e-9f0a-bc1234567891",
+      "team_id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+      "user_id": "usr_abc123",
+      "email": "alice@acme.io",
+      "display_name": "Alice",
+      "role": "owner",
+      "invitation_status": "active",
+      "created_at": "2024-06-20T10:30:00Z",
+      "last_active_at": null
+    }
+  ]
+}
+```
+</CodeGroup>
+
+---
+
+## Get a team by ID
+
+Retrieves a single team by its UUID. The authenticated user must be a member of the team.
+
+```
+GET /api/v1/teams/{team_id}
+```
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team to retrieve.
+</ParamField>
+
+### Query parameters
+
+<ParamField query="include_members" type="boolean" default="false">
+  When `true`, the response includes the full `members` array.
+</ParamField>
+
+### Response
+
+A single `TeamResponse` object. Returns `404 Not Found` if the team does not exist. Returns `403 Forbidden` if the current user is not a member.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "name": "Acme Engineering",
+  "slug": "acme-engineering",
+  "description": "Core engineering team for Acme Corp.",
+  "avatar_url": null,
+  "is_personal": false,
+  "created_by_user_id": "usr_abc123",
+  "created_by_email": "alice@acme.io",
+  "team_size": 3,
+  "created_at": "2024-03-01T09:00:00Z",
+  "updated_at": "2024-06-15T14:22:00Z",
+  "members": []
+}
+```
+</CodeGroup>
+
+---
+
+## Get a team by slug
+
+Retrieves a single team using its human-readable slug instead of its UUID. The authenticated user must be a member of the team.
+
+```
+GET /api/v1/teams/by-slug/{slug}
+```
+
+### Path parameters
+
+<ParamField path="slug" type="string" required>
+  The URL-safe slug of the team to retrieve (e.g. `acme-engineering`).
+</ParamField>
+
+### Query parameters
+
+<ParamField query="include_members" type="boolean" default="false">
+  When `true`, the response includes the full `members` array.
+</ParamField>
+
+### Response
+
+A single `TeamResponse` object. Returns `404 Not Found` if no team with that slug exists. Returns `403 Forbidden` if the current user is not a member.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.toban.io/api/v1/teams/by-slug/acme-engineering" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "name": "Acme Engineering",
+  "slug": "acme-engineering",
+  "description": "Core engineering team for Acme Corp.",
+  "avatar_url": null,
+  "is_personal": false,
+  "created_by_user_id": "usr_abc123",
+  "created_by_email": "alice@acme.io",
+  "team_size": 3,
+  "created_at": "2024-03-01T09:00:00Z",
+  "updated_at": "2024-06-15T14:22:00Z",
+  "members": []
+}
+```
+</CodeGroup>
+
+---
+
+## Update a team
+
+Updates the metadata of an existing team. Requires the caller to be an `owner` or `admin` of the team.
+
+```
+PUT /api/v1/teams/{team_id}
+```
+
+<Warning>
+  Only team **owners** and **admins** can update team details. Requests from `member` or `viewer` roles will receive a `403 Forbidden` response.
+</Warning>
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team to update.
+</ParamField>
+
+### Request body
+
+All fields are optional. Only the fields you supply will be changed.
+
+<ParamField body="name" type="string">
+  New team display name (max 255 characters).
+</ParamField>
+
+<ParamField body="slug" type="string">
+  New URL-safe slug (max 255 characters). Must be globally unique.
+</ParamField>
+
+<ParamField body="description" type="string">
+  Updated description for the team.
+</ParamField>
+
+<ParamField body="avatar_url" type="string">
+  New URL for the team avatar or logo.
+</ParamField>
+
+<ParamField body="team_metadata" type="object">
+  Replaces the team's JSONB metadata object entirely.
+</ParamField>
+
+### Response
+
+Returns the updated `TeamResponse` object (without the `members` array). Returns `403 Forbidden` if the caller lacks `owner` or `admin` role.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X PUT "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890" \
+  -H "Authorization: Bearer <YOUR_TOKEN>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "description": "Platform engineering squad — backend & infrastructure.",
+    "avatar_url": "https://cdn.toban.io/avatars/acme-platform.png"
+  }'
+```
+
+```json Response
+{
+  "id": "018e2f3a-1b2c-7d4e-9f0a-bc1234567890",
+  "name": "Acme Engineering",
+  "slug": "acme-engineering",
+  "description": "Platform engineering squad — backend & infrastructure.",
+  "avatar_url": "https://cdn.toban.io/avatars/acme-platform.png",
+  "is_personal": false,
+  "created_by_user_id": "usr_abc123",
+  "created_by_email": "alice@acme.io",
+  "team_size": 3,
+  "created_at": "2024-03-01T09:00:00Z",
+  "updated_at": "2024-06-20T11:05:00Z",
+  "members": []
+}
+```
+</CodeGroup>
+
+---
+
+## Delete a team
+
+Permanently deletes a team and all of its associated data, including members, integrations, and reports. This action is irreversible.
+
+```
+DELETE /api/v1/teams/{team_id}
+```
+
+<Warning>
+  Only team **owners** can delete a team. This operation is **permanent** — all integrations, reports, and member records linked to the team are removed. There is no undo.
+</Warning>
+
+### Path parameters
+
+<ParamField path="team_id" type="uuid" required>
+  The UUID of the team to delete.
+</ParamField>
+
+### Response
+
+Returns a JSON success message on `200 OK`. Returns `403 Forbidden` if the caller is not an `owner`.
+
+### Example
+
+<CodeGroup>
+```bash cURL
+curl -X DELETE "https://api.toban.io/api/v1/teams/018e2f3a-1b2c-7d4e-9f0a-bc1234567890" \
+  -H "Authorization: Bearer <YOUR_TOKEN>"
+```
+
+```json Response
+{
+  "status": "success",
+  "message": "Team deleted successfully"
+}
+```
+</CodeGroup>

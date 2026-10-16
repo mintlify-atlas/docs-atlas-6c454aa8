@@ -1,0 +1,151 @@
+---
+title: "How Toban Analyzes Team Contributions"
+sidebarTitle: "Analysis"
+description: "Toban uses OpenRouter LLMs to analyze Slack channel messages, extract topics and contributors, and store structured results as ResourceAnalysis records."
+---
+
+Toban's contribution analysis pipeline takes raw Slack message data and turns it into structured, human-readable insights about who contributed what — and how topics evolved — over a defined time window. The pipeline is asynchronous: when you submit an analysis request, Toban creates database records tracking each step, then background workers fetch messages, build an LLM prompt, call the OpenRouter API, and write the structured results back. The final output is a `ResourceAnalysis` record containing four narrative sections you can display directly in the UI or include in a broader cross-resource report.
+
+<Note>
+  Every analysis is scoped to a `period_start` and `period_end` datetime. Only messages whose `message_datetime` falls within that range are included. If no messages exist in the window, the analysis completes immediately with a "no data" summary rather than making an LLM API call.
+</Note>
+
+## Analysis pipeline
+
+<Steps>
+  <Step title="Message sync">
+    Before any analysis can run, Toban must have synced messages from Slack into the local `SlackMessage` table. The sync process uses the Slack API to page through channel history, storing each message's text, author, thread relationships (`thread_ts`, `is_thread_parent`, `is_thread_reply`), reaction counts, and `message_datetime`. Subsequent syncs are incremental, using `oldest_synced_ts` and `latest_synced_ts` timestamps to fetch only new messages.
+  </Step>
+  <Step title="Message preprocessing">
+    The `SlackChannelAnalysisService` queries `SlackMessage` records filtered to the requested channel and date range. User mentions are resolved from Slack IDs to display names (`processed_text`). Bot messages and system events (e.g., "user joined the channel") are filtered out. Per-user contribution statistics are computed: message count, thread creation count, reply count, reactions given and received.
+  </Step>
+  <Step title="LLM prompt construction">
+    A prompt template is selected based on the `analysis_type` (see below). The template is populated with channel metadata (name, purpose, topic, workspace name), the time period, aggregate statistics (total messages, total users, total threads), a per-user contributions summary, a messages-by-date breakdown, and a sample of representative messages. This gives the model concrete evidence to reason from rather than asking it to hallucinate.
+  </Step>
+  <Step title="OpenRouter API call">
+    The populated prompt is sent to the OpenRouter API via `OpenRouterService`. The model to use is resolved in order of priority: an explicit `model` parameter on the request, falling back to the configured `OPENROUTER_DEFAULT_MODEL` (default: `anthropic/claude-3-sonnet:20240229`). The service enforces `OPENROUTER_MAX_TOKENS` (default: 4000) and `OPENROUTER_TEMPERATURE` (default: 0.7). The LLM is instructed to return a structured JSON object.
+  </Step>
+  <Step title="Structured result storage">
+    The JSON response is parsed and its four output sections are written into the `ResourceAnalysis` record. Statistical fields (`message_count`, `participant_count`, `thread_count`, `reaction_count`) are also persisted. The `status` column transitions to `COMPLETED`. If the LLM call fails, `status` is set to `FAILED` and error details are preserved.
+  </Step>
+</Steps>
+
+## Analysis types
+
+The `AnalysisType` enum defines the kinds of insights that can be requested for a resource:
+
+| Value | Description |
+|---|---|
+| `CONTRIBUTION` | Identifies individual contributors, their activity levels, and impact patterns across the channel |
+| `TOPICS` | Extracts the main discussion themes and how they evolved over the analysis period |
+| `SENTIMENT` | Gauges the overall tone and emotional tenor of conversations |
+| `ACTIVITY` | Focuses on participation patterns, peak activity times, and engagement rhythms |
+
+The `AnalysisResourceType` enum defines the kinds of resources that can be analyzed:
+
+| Value | Description |
+|---|---|
+| `SLACK_CHANNEL` | A Slack channel synced via a Slack integration |
+| `GITHUB_REPO` | A GitHub repository (future) |
+| `NOTION_PAGE` | A Notion page (future) |
+
+Currently the full analysis pipeline is implemented for `SLACK_CHANNEL`. The other resource types are defined in the schema for future expansion.
+
+## ResourceAnalysis model
+
+A `ResourceAnalysis` record represents a single completed (or in-progress) analysis of one resource. It is always associated with a parent `CrossResourceReport`. Key fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier |
+| `cross_resource_report_id` | UUID | Parent report this analysis belongs to |
+| `integration_id` | UUID | The integration that owns the resource |
+| `resource_id` | UUID | The specific resource (e.g., a `SlackChannel` UUID) |
+| `resource_type` | `AnalysisResourceType` | Type of resource being analyzed |
+| `analysis_type` | `AnalysisType` | The kind of analysis performed |
+| `status` | `ReportStatus` | Current state: `PENDING`, `IN_PROGRESS`, `COMPLETED`, or `FAILED` |
+| `period_start` | datetime | Start of the analysis window (inclusive) |
+| `period_end` | datetime | End of the analysis window (inclusive) |
+| `resource_summary` | text | LLM-generated narrative summary of the resource's activity |
+| `topic_analysis` | text | LLM-generated breakdown of discussion topics |
+| `contributor_insights` | text | LLM-generated profile of each active contributor |
+| `key_highlights` | text | LLM-identified notable moments, decisions, or milestones |
+| `model_used` | string | The OpenRouter model identifier used for this analysis |
+| `analysis_generated_at` | datetime | When the LLM response was received and stored |
+| `message_count` | integer | Total messages included in the analysis |
+| `participant_count` | integer | Number of distinct users who sent at least one message |
+| `thread_count` | integer | Number of distinct threads in the period |
+| `reaction_count` | integer | Total reactions across all messages in the period |
+| `results` | JSONB | Raw structured JSON returned by the LLM for downstream use |
+| `analysis_parameters` | JSONB | The configuration snapshot used when the analysis was triggered |
+
+## Cross-resource reports
+
+A `CrossResourceReport` groups one or more `ResourceAnalysis` records together into a unified report scoped to a team. It represents the user-initiated analysis session and tracks the overall progress of all underlying per-resource analyses.
+
+| Field | Type | Description |
+|---|---|---|
+| `id` | UUID | Unique identifier |
+| `team_id` | UUID | The team that owns this report |
+| `title` | string | User-provided report title |
+| `description` | text | Optional description |
+| `status` | `ReportStatus` | Aggregated status across all resource analyses |
+| `date_range_start` | datetime | Start of the overall report window |
+| `date_range_end` | datetime | End of the overall report window |
+| `comprehensive_analysis` | text | LLM-generated cross-resource synthesis (generated after all individual analyses complete) |
+| `model_used` | string | Model used for the comprehensive synthesis step |
+| `report_parameters` | JSONB | Configuration snapshot for the full report |
+
+The status lifecycle for a `CrossResourceReport` follows this flow:
+
+```
+PENDING → IN_PROGRESS → COMPLETED
+                      ↘ FAILED
+```
+
+1. **PENDING** — the report record has been created and `ResourceAnalysis` children have been queued.
+2. **IN_PROGRESS** — at least one `ResourceAnalysis` is currently being processed.
+3. **COMPLETED** — all `ResourceAnalysis` records finished successfully and the optional comprehensive synthesis has been generated.
+4. **FAILED** — one or more `ResourceAnalysis` records failed and could not be retried.
+
+Individual `ResourceAnalysis` records follow the same `ReportStatus` enum independently, so a report can be partially complete with some analyses in `COMPLETED` and others still `IN_PROGRESS` or `FAILED`.
+
+## Model selection
+
+The OpenRouter model used for each analysis is resolved in the following order of priority:
+
+<Steps>
+  <Step title="Explicit request parameter">
+    The `AnalysisOptions.model` field in the API request payload. If provided, this overrides everything else. Example: `"anthropic/claude-3-opus-20240229"`.
+  </Step>
+  <Step title="Application default">
+    The `OPENROUTER_DEFAULT_MODEL` environment variable, which defaults to `"anthropic/claude-3-sonnet:20240229"` if not set. This is the value in `app.config.Settings`.
+  </Step>
+</Steps>
+
+The chosen model identifier is stored in `ResourceAnalysis.model_used` (and `CrossResourceReport.model_used` for the synthesis step), so you can always trace which model produced a given result.
+
+## What the LLM returns
+
+Toban instructs the model to respond with a JSON object containing four keys. These map directly onto the `ResourceAnalysis` text columns:
+
+<CardGroup cols={2}>
+  <Card title="resource_summary" icon="align-left">
+    A narrative overview of the channel's activity during the period. Covers overall participation level, the general nature of discussions, and any notable patterns in how the channel was used. Stored in `ResourceAnalysis.resource_summary`.
+  </Card>
+  <Card title="topic_analysis" icon="tags">
+    An enumeration and description of the main discussion topics that emerged. For each topic the model identifies who drove it, how it evolved, and any outcomes or decisions reached. Stored in `ResourceAnalysis.topic_analysis`.
+  </Card>
+  <Card title="contributor_insights" icon="users">
+    A per-contributor breakdown describing each active participant's role and impact. Covers posting frequency, thread engagement, reactions received, and the nature of their contributions (e.g., problem-solver, knowledge-sharer, coordinator). Stored in `ResourceAnalysis.contributor_insights`.
+  </Card>
+  <Card title="key_highlights" icon="star">
+    A curated list of notable moments: key decisions made, important questions raised and answered, milestones celebrated, or significant announcements. Stored in `ResourceAnalysis.key_highlights`.
+  </Card>
+</CardGroup>
+
+If the LLM response is missing any of these sections despite the others being present, the pipeline fills in a safe fallback string and logs a warning rather than failing the analysis. This prevents a partially malformed LLM response from blocking the entire report.
+
+<Tip>
+  The `results` JSONB field on `ResourceAnalysis` stores the complete raw LLM response object. If you need to reprocess or reformat the output without re-running the full analysis, you can read from `results` directly rather than calling the LLM again.
+</Tip>

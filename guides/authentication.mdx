@@ -1,0 +1,208 @@
+---
+title: "Authenticate Requests with Supabase JWT"
+sidebarTitle: "Authentication"
+description: "Toban uses Supabase for user authentication. Learn how to sign in, obtain a JWT, and pass it as a Bearer token in all API requests."
+---
+
+Toban uses [Supabase Auth](https://supabase.com/docs/guides/auth) — an open-source Firebase alternative — to handle user sign-in, session management, and JWT issuance. Every protected API endpoint requires a valid Supabase JWT passed as a `Bearer` token in the `Authorization` header. The backend validates the token against the `SUPABASE_JWT_SECRET` using the HS256 algorithm and extracts the `sub` claim as the user's ID.
+
+## Set Up Supabase
+
+<Steps>
+  <Step title="Create a Supabase project">
+    Go to [supabase.com](https://supabase.com/) and sign up or sign in. Click **New Project**, choose an organization, give the project a name, set a strong database password, and select a region. Wait for the project to initialize (typically 1–2 minutes).
+  </Step>
+  <Step title="Enable Email/Password authentication">
+    In your project dashboard, navigate to **Authentication → Providers**. Ensure **Email** is enabled. Under **Authentication → Settings**, configure the **Site URL** (the root URL of your frontend) and add the following to **Redirect URLs**:
+
+    ```
+    http://localhost:5173/auth/callback
+    ```
+
+    For production deployments, also add your production domain:
+
+    ```
+    https://your-app-domain.com/auth/callback
+    ```
+  </Step>
+  <Step title="Enable social providers (optional)">
+    To allow GitHub or Google sign-in, navigate to **Authentication → Providers** and enable the desired provider. Each provider requires you to create an OAuth app on that platform and paste the client ID and secret into Supabase.
+  </Step>
+  <Step title="Collect your credentials">
+    Navigate to **Project Settings → API** and copy the following values. You will need these in the next section.
+
+    | Value | Where to find it | Where it is used |
+    |---|---|---|
+    | **Project URL** | Project Settings → API → Project URL | Backend `SUPABASE_URL`, Frontend `VITE_SUPABASE_URL` |
+    | **Anon (public) key** | Project Settings → API → Project API keys | Frontend `VITE_SUPABASE_ANON_KEY` |
+    | **Service role key** | Project Settings → API → Project API keys | Backend `SUPABASE_KEY` (keep secret) |
+    | **JWT Secret** | Project Settings → API → JWT Settings | Backend `SUPABASE_JWT_SECRET` |
+  </Step>
+</Steps>
+
+<Warning>
+  The `SUPABASE_JWT_SECRET` on your backend **must exactly match** the JWT secret shown in your Supabase project's **Project Settings → API → JWT Settings**. A mismatch will cause every API request to fail with `401 Unauthorized` even when the user has a valid session.
+</Warning>
+
+## Environment Variables
+
+Configure these variables before starting the application.
+
+**Backend** (`.env` or `.env.docker`):
+
+```bash
+# Supabase connection
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_KEY=your-service-role-key          # Never expose this on the frontend
+SUPABASE_JWT_SECRET=your-jwt-secret         # Must match Supabase project setting
+SUPABASE_ANON_KEY=your-anon-key             # Public key, safe to expose
+
+# Database
+DATABASE_URL=postgresql+asyncpg://user:password@localhost:5432/toban
+
+# OpenRouter (for LLM analysis)
+OPENROUTER_API_KEY=your-openrouter-api-key
+OPENROUTER_DEFAULT_MODEL=anthropic/claude-3-opus:20240229
+```
+
+**Frontend** (`.env` or `.env.local`):
+
+```bash
+VITE_SUPABASE_URL=https://your-project-ref.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key        # Safe to expose in browser bundles
+VITE_API_URL=http://localhost:8000/api/v1   # URL to the backend API
+```
+
+<Note>
+  Only variables prefixed with `VITE_` are included in the Vite frontend build and exposed to the browser. Never put the service role key or JWT secret in a `VITE_` variable.
+</Note>
+
+## Sign-In Flow
+
+Toban's frontend uses the `@supabase/supabase-js` client to handle authentication. The `AuthContext` provider in `frontend/src/context/AuthContext.tsx` manages session state for the entire application.
+
+1. The user submits their email and password (or clicks a social login button).
+2. The Supabase client calls `supabase.auth.signInWithPassword()` (or `signInWithOAuth()` for social providers).
+3. On success, Supabase returns a `Session` object containing an `access_token` JWT and a `refresh_token`.
+4. `AuthContext` stores the session in state and exposes `session.access_token` throughout the component tree.
+5. Every API request to the Toban backend includes `Authorization: Bearer <access_token>` in its headers.
+6. On page reload, `supabase.auth.getSession()` restores the session from `localStorage` automatically.
+
+The frontend also registers an `onAuthStateChange` listener so that sign-outs, token refreshes, and session expirations are reflected across all open tabs immediately.
+
+## Using the Token in API Calls
+
+Pass the JWT as a `Bearer` token in the `Authorization` header on every request to a protected endpoint:
+
+<CodeGroup>
+```bash curl
+curl -X GET "https://api.example.com/api/v1/integrations?team_id=team-uuid" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+```typescript TypeScript (fetch)
+const response = await fetch(`${import.meta.env.VITE_API_URL}/integrations?team_id=${teamId}`, {
+  method: 'GET',
+  headers: {
+    Authorization: `Bearer ${session.access_token}`,
+    'Content-Type': 'application/json',
+  },
+})
+```
+
+```python Python (requests)
+import requests
+
+headers = {
+    "Authorization": f"Bearer {jwt_token}",
+    "Content-Type": "application/json",
+}
+response = requests.get(
+    "https://api.example.com/api/v1/integrations",
+    params={"team_id": "team-uuid"},
+    headers=headers,
+)
+```
+</CodeGroup>
+
+Requests without a valid `Authorization` header will receive a `403 Forbidden` response from FastAPI's `HTTPBearer` security scheme. Requests with an expired or tampered token will receive `401 Unauthorized`.
+
+## Token Validation on the Backend
+
+The `get_current_user` dependency in `backend/app/core/auth.py` is attached to every protected route via FastAPI's dependency injection system. Here is an abridged version of how it works:
+
+```python
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+from jose import jwt
+
+security = HTTPBearer()
+
+def decode_token(token: str) -> dict:
+    """Decode and validate a Supabase JWT."""
+    jwt_secret = settings.SUPABASE_JWT_SECRET
+
+    # Primary approach: verify signature only (no audience/issuer check)
+    return jwt.decode(
+        token,
+        jwt_secret,
+        algorithms=["HS256"],
+        options={
+            "verify_signature": True,
+            "verify_aud": False,
+            "verify_iss": False,
+        },
+    )
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> dict:
+    """
+    Extract and validate the current user from the Bearer token.
+
+    Returns a dict containing at minimum:
+      - id:    the user's UUID (from the JWT 'sub' claim)
+      - email: the user's email address
+      - role:  the Supabase auth role (typically 'authenticated')
+    """
+    token = credentials.credentials
+    payload = decode_token(token)
+
+    user_id = payload.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token payload",
+        )
+
+    return {
+        "id": user_id,
+        "email": payload.get("email", ""),
+        "role": payload.get("role", "authenticated"),
+    }
+```
+
+The backend tries three progressive verification strategies (signature only → with audience → with audience and issuer) to handle the range of JWT formats that Supabase may issue depending on project configuration. The `id` field in the returned dict is used throughout the application to scope database queries to the authenticated user.
+
+## Supported Auth Providers
+
+Toban supports all auth providers that can be configured in the Supabase dashboard. The following are commonly used:
+
+<CardGroup cols={3}>
+  <Card title="Email / Password" icon="envelope">
+    Built-in, no additional configuration needed. Enable under **Authentication → Providers → Email**.
+  </Card>
+  <Card title="GitHub OAuth" icon="github">
+    Create a GitHub OAuth App at github.com/settings/developers and paste the client ID and secret into Supabase under **Authentication → Providers → GitHub**.
+  </Card>
+  <Card title="Google OAuth" icon="google">
+    Create a Google OAuth client in Google Cloud Console and configure it under **Authentication → Providers → Google** in Supabase.
+  </Card>
+</CardGroup>
+
+The frontend helper functions in `frontend/src/lib/supabase.ts` expose `signInWithGithub()` and `signInWithGoogle()`, which both call `supabase.auth.signInWithOAuth()` with `redirectTo` set to `{window.location.origin}/auth/callback`. The callback route exchanges the OAuth code for a Supabase session automatically.
+
+## Team Context in Tokens
+
+After sign-in, Toban enriches the session with team membership data by calling `GET /api/v1/teams/auth/context`. The response is stored in `AuthContext` and used to set the active team. When a user switches teams via `switchTeam()`, the frontend calls `POST /api/v1/teams/auth/switch-team`, which returns a new JWT containing `current_team_id` and `current_team_role` claims embedded in a custom token. This extended token is used for all subsequent requests that require team-scoped authorization.
